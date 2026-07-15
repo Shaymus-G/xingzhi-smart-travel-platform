@@ -1,0 +1,52 @@
+# =========================
+# Web Framework
+# =========================
+fastapi
+uvicorn[standard]
+
+# =========================
+# Database
+# =========================
+sqlalchemy
+pymysql
+alembic
+
+# =========================
+# Configuration
+# =========================
+python-dotenv
+pydantic
+pydantic-settings
+
+# =========================
+# Authentication
+# =========================
+python-jose[cryptography]
+passlib[bcrypt]
+
+# =========================
+# HTTP Client
+# =========================
+requests
+httpx
+
+# =========================
+# AI Service Communication
+# =========================
+openai
+
+# =========================
+# Data Processing
+# =========================
+numpy
+pandas
+
+# =========================
+# Testing
+# =========================
+pytest
+
+# =========================
+# Development Tools
+# =========================
+black
