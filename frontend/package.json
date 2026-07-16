@@ -1,0 +1,34 @@
+{
+  "name": "xingzhi-frontend",
+  "version": "1.0.0",
+  "description": "行知 XingZhi - 智慧文旅服务平台 移动端",
+  "private": true,
+  "scripts": {
+    "dev": "uni",
+    "build": "uni build",
+    "dev:h5": "uni",
+    "build:h5": "uni build",
+    "dev:mp-weixin": "uni -p mp-weixin",
+    "build:mp-weixin": "uni build -p mp-weixin",
+    "type-check": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@dcloudio/uni-app": "3.0.0-alpha-4080720251125001",
+    "@dcloudio/uni-app-plus": "3.0.0-alpha-4080720251125001",
+    "@dcloudio/uni-components": "3.0.0-alpha-4080720251125001",
+    "@dcloudio/uni-h5": "3.0.0-alpha-4080720251125001",
+    "@dcloudio/uni-mp-weixin": "3.0.0-alpha-4080720251125001",
+    "pinia": "^2.1.7",
+    "vue": "^3.4.21",
+    "vue-router": "^4.3.0"
+  },
+  "devDependencies": {
+    "@dcloudio/types": "^3.4.8",
+    "@dcloudio/vite-plugin-uni": "3.0.0-alpha-4080720251125001",
+    "@uni-helper/uni-app-types": "^0.5.12",
+    "sass": "^1.72.0",
+    "typescript": "^5.4.2",
+    "vite": "^5.1.6",
+    "vue-tsc": "^2.0.6"
+  }
+}

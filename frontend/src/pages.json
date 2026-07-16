@@ -1,0 +1,107 @@
+{
+  "pages": [
+    {
+      "path": "pages/index/index",
+      "style": {
+        "navigationBarTitleText": "行知",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/auth/login",
+      "style": {
+        "navigationBarTitleText": "登录",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/auth/register",
+      "style": {
+        "navigationBarTitleText": "注册",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/home/home",
+      "style": {
+        "navigationBarTitleText": "行知",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/city/detail",
+      "style": {
+        "navigationBarTitleText": "城市详情",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/scenic/detail",
+      "style": {
+        "navigationBarTitleText": "景点详情",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/ai/chat",
+      "style": {
+        "navigationBarTitleText": "AI 助手",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/plan/list",
+      "style": {
+        "navigationBarTitleText": "旅行计划",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/plan/detail",
+      "style": {
+        "navigationBarTitleText": "计划详情",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/profile/profile",
+      "style": {
+        "navigationBarTitleText": "个人中心",
+        "navigationStyle": "custom"
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "行知",
+    "navigationBarBackgroundColor": "#FFFFFF",
+    "backgroundColor": "#F5F5F5"
+  },
+  "tabBar": {
+    "color": "#999999",
+    "selectedColor": "#4A90D9",
+    "backgroundColor": "#FFFFFF",
+    "borderStyle": "black",
+    "list": [
+      {
+        "pagePath": "pages/home/home",
+        "text": "首页",
+        "iconPath": "static/images/tab-home.png",
+        "selectedIconPath": "static/images/tab-home-active.png"
+      },
+      {
+        "pagePath": "pages/ai/chat",
+        "text": "AI 助手",
+        "iconPath": "static/images/tab-ai.png",
+        "selectedIconPath": "static/images/tab-ai-active.png"
+      },
+      {
+        "pagePath": "pages/profile/profile",
+        "text": "个人中心",
+        "iconPath": "static/images/tab-profile.png",
+        "selectedIconPath": "static/images/tab-profile-active.png"
+      }
+    ]
+  },
+  "uniIdRouter": {}
+}

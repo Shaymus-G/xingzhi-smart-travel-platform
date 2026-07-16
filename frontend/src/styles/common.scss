@@ -1,0 +1,79 @@
+/* ========================================
+   行知 XingZhi — 全局样式变量 & 通用样式
+   ======================================== */
+
+// ========== 颜色系统 ==========
+$color-primary: #4A90D9;
+$color-primary-light: #6BA5E7;
+$color-primary-dark: #3A7BC8;
+
+$color-success: #52C41A;
+$color-warning: #FAAD14;
+$color-danger: #FF4D4F;
+
+$color-text-primary: #333333;
+$color-text-secondary: #666666;
+$color-text-hint: #999999;
+
+$color-bg: #F5F5F5;
+$color-bg-white: #FFFFFF;
+$color-border: #E8E8E8;
+
+// ========== 间距 ==========
+$spacing-xs: 8rpx;
+$spacing-sm: 16rpx;
+$spacing-md: 24rpx;
+$spacing-lg: 32rpx;
+$spacing-xl: 48rpx;
+
+// ========== 圆角 ==========
+$radius-sm: 8rpx;
+$radius-md: 12rpx;
+$radius-lg: 16rpx;
+$radius-round: 50%;
+
+// ========== 字号 ==========
+$font-size-xs: 22rpx;
+$font-size-sm: 26rpx;
+$font-size-base: 28rpx;
+$font-size-md: 32rpx;
+$font-size-lg: 36rpx;
+$font-size-xl: 44rpx;
+
+// ========== 阴影 ==========
+$shadow-card: 0 2rpx 12rpx rgba(0, 0, 0, 0.08);
+
+// ========== 通用工具类 ==========
+.text-center {
+  text-align: center;
+}
+
+.text-primary {
+  color: $color-primary;
+}
+
+.text-secondary {
+  color: $color-text-secondary;
+}
+
+.text-hint {
+  color: $color-text-hint;
+}
+
+.flex-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.flex-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+// 安全区域适配
+.safe-area-bottom {
+  padding-bottom: constant(safe-area-inset-bottom);
+  padding-bottom: env(safe-area-inset-bottom);
+}
