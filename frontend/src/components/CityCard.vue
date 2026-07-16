@@ -1,21 +1,21 @@
 <script setup lang="ts">
 /**
- * 城市卡片组件（骨架）
- * 后续接入真实数据时替换占位内容
+ * 城市卡片组件
+ * 只负责展示 + emit 点击事件，不写死跳转路径。
  */
 interface Props {
   cityId: number
   name: string
-  province?: string
-  coverImage?: string
-  level?: string
-  description?: string
+  province?: string | null
+  coverImage?: string | null
+  level?: string | null
+  description?: string | null
 }
 
 withDefaults(defineProps<Props>(), {
   province: '',
   coverImage: '',
-  level: '普通',
+  level: '',
   description: '',
 })
 
@@ -23,26 +23,34 @@ const emit = defineEmits<{
   click: [cityId: number]
 }>()
 
-function handleClick(cityId: number) {
-  emit('click', cityId)
-  uni.navigateTo({ url: `/pages/city/detail?id=${cityId}` })
+/** 图片兜底 */
+const FALLBACK_IMAGE = '/static/logo.png'
+
+function getImage(src?: string | null): string {
+  return src || FALLBACK_IMAGE
+}
+
+/** 截断描述 */
+function truncate(text?: string | null, max = 50): string {
+  if (!text) return ''
+  return text.length > max ? text.slice(0, max) + '...' : text
 }
 </script>
 
 <template>
-  <view class="city-card" @tap="handleClick(cityId)">
+  <view class="city-card" @tap="emit('click', cityId)">
     <image
       class="city-card-image"
-      :src="coverImage || '/static/logo.png'"
+      :src="getImage(coverImage)"
       mode="aspectFill"
     />
     <view class="city-card-info">
       <view class="city-card-header">
         <text class="city-card-name">{{ name }}</text>
-        <text class="city-card-level">{{ level }}</text>
+        <text v-if="level" class="city-card-level">{{ level }}</text>
       </view>
       <text v-if="province" class="city-card-province">{{ province }}</text>
-      <text v-if="description" class="city-card-desc">{{ description }}</text>
+      <text v-if="description" class="city-card-desc">{{ truncate(description) }}</text>
     </view>
   </view>
 </template>

@@ -10,10 +10,8 @@ import * as userApi from '@/api/user'
 import {
   getToken,
   setToken,
-  removeToken,
   getUserInfo,
   setUserInfo,
-  removeUserInfo,
   clearAuthStorage,
 } from '@/utils/storage'
 

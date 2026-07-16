@@ -2,80 +2,94 @@
  * 旅游资源 API 接口（对应后端 /api/travel/*）
  */
 import { http } from './request'
-import type {
-  CityResponse,
-  ScenicSpotResponse,
-  HotelResponse,
-  RestaurantResponse,
-  TravelPlanResponse,
-} from '@/types/travel'
+import type { City, ScenicSpot, Hotel, Restaurant, TravelPlan } from '@/types/travel'
+
+/** 过滤掉 undefined / null / 空字符串的查询参数 */
+function filterParams(params?: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (!params) return undefined
+  const result: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== '') {
+      result[key] = value
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined
+}
 
 // ==================== City ====================
 
-/** 城市列表（支持按等级、省份筛选） */
+/** 城市列表 */
 export function getCities(params?: {
-  skip?: number
-  limit?: number
   level?: string
   province?: string
-}) {
-  return http.get<CityResponse[]>('/api/travel/cities', params as unknown as Record<string, unknown>)
+  skip?: number
+  limit?: number
+}): Promise<City[]> {
+  return http.get<City[]>('/api/travel/cities', filterParams(params as Record<string, unknown>))
 }
 
 /** 城市详情 */
-export function getCityById(cityId: number) {
-  return http.get<CityResponse>(`/api/travel/cities/${cityId}`)
+export function getCityDetail(id: number): Promise<City> {
+  return http.get<City>(`/api/travel/cities/${id}`)
 }
 
 // ==================== ScenicSpot ====================
 
-/** 景点列表（支持按城市、类别筛选） */
+/** 景点列表 */
 export function getScenics(params?: {
-  skip?: number
-  limit?: number
   city_id?: number
   category?: string
-}) {
-  return http.get<ScenicSpotResponse[]>('/api/travel/scenics', params as unknown as Record<string, unknown>)
+  skip?: number
+  limit?: number
+}): Promise<ScenicSpot[]> {
+  return http.get<ScenicSpot[]>('/api/travel/scenics', filterParams(params as Record<string, unknown>))
 }
 
 /** 景点详情 */
-export function getScenicById(scenicId: number) {
-  return http.get<ScenicSpotResponse>(`/api/travel/scenics/${scenicId}`)
+export function getScenicDetail(id: number): Promise<ScenicSpot> {
+  return http.get<ScenicSpot>(`/api/travel/scenics/${id}`)
 }
 
 // ==================== Hotel ====================
 
 /** 酒店列表 */
-export function getHotels(params?: { city_id?: number; skip?: number; limit?: number }) {
-  return http.get<HotelResponse[]>('/api/travel/hotels', params as unknown as Record<string, unknown>)
+export function getHotels(params?: {
+  city_id?: number
+  skip?: number
+  limit?: number
+}): Promise<Hotel[]> {
+  return http.get<Hotel[]>('/api/travel/hotels', filterParams(params as Record<string, unknown>))
 }
 
 /** 酒店详情 */
-export function getHotelById(hotelId: number) {
-  return http.get<HotelResponse>(`/api/travel/hotels/${hotelId}`)
+export function getHotelDetail(id: number): Promise<Hotel> {
+  return http.get<Hotel>(`/api/travel/hotels/${id}`)
 }
 
 // ==================== Restaurant ====================
 
 /** 餐厅列表 */
-export function getRestaurants(params?: { city_id?: number; skip?: number; limit?: number }) {
-  return http.get<RestaurantResponse[]>('/api/travel/restaurants', params as unknown as Record<string, unknown>)
+export function getRestaurants(params?: {
+  city_id?: number
+  skip?: number
+  limit?: number
+}): Promise<Restaurant[]> {
+  return http.get<Restaurant[]>('/api/travel/restaurants', filterParams(params as Record<string, unknown>))
 }
 
 /** 餐厅详情 */
-export function getRestaurantById(restaurantId: number) {
-  return http.get<RestaurantResponse>(`/api/travel/restaurants/${restaurantId}`)
+export function getRestaurantDetail(id: number): Promise<Restaurant> {
+  return http.get<Restaurant>(`/api/travel/restaurants/${id}`)
 }
 
 // ==================== TravelPlan ====================
 
 /** 我的旅行计划列表 */
-export function getMyPlans(params?: { skip?: number; limit?: number }) {
-  return http.get<TravelPlanResponse[]>('/api/travel/plans', params as unknown as Record<string, unknown>)
+export function getMyPlans(params?: { skip?: number; limit?: number }): Promise<TravelPlan[]> {
+  return http.get<TravelPlan[]>('/api/travel/plans', filterParams(params as Record<string, unknown>))
 }
 
 /** 旅行计划详情 */
-export function getPlanById(planId: number) {
-  return http.get<TravelPlanResponse>(`/api/travel/plans/${planId}`)
+export function getPlanDetail(id: number): Promise<TravelPlan> {
+  return http.get<TravelPlan>(`/api/travel/plans/${id}`)
 }

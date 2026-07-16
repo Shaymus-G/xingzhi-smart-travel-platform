@@ -1,7 +1,7 @@
 /**
  * 社交互动 API 接口（对应后端 /api/social/*）
  */
-import { http } from './request'
+import { http, toBody } from './request'
 import type {
   FavoriteCreate,
   FavoriteResponse,
@@ -13,12 +13,12 @@ import type {
 
 /** 我的收藏列表 */
 export function getMyFavorites(params?: { skip?: number; limit?: number }) {
-  return http.get<FavoriteResponse[]>('/api/social/favorites', params as unknown as Record<string, unknown>)
+  return http.get<FavoriteResponse[]>('/api/social/favorites', params)
 }
 
 /** 添加收藏 */
 export function addFavorite(data: FavoriteCreate) {
-  return http.post<FavoriteResponse>('/api/social/favorites', data as unknown as Record<string, unknown>)
+  return http.post<FavoriteResponse>('/api/social/favorites', toBody(data))
 }
 
 /** 取消收藏 */
@@ -35,17 +35,17 @@ export function getReviews(params: {
   skip?: number
   limit?: number
 }) {
-  return http.get<ReviewResponse[]>('/api/social/reviews', params as unknown as Record<string, unknown>)
+  return http.get<ReviewResponse[]>('/api/social/reviews', params)
 }
 
 /** 发表评论 */
 export function createReview(data: ReviewCreate) {
-  return http.post<ReviewResponse>('/api/social/reviews', data as unknown as Record<string, unknown>)
+  return http.post<ReviewResponse>('/api/social/reviews', toBody(data))
 }
 
 /** 更新评论 */
 export function updateReview(reviewId: number, data: { content?: string; score?: number }) {
-  return http.put<ReviewResponse>(`/api/social/reviews/${reviewId}`, data as unknown as Record<string, unknown>)
+  return http.put<ReviewResponse>(`/api/social/reviews/${reviewId}`, toBody(data))
 }
 
 /** 删除评论 */

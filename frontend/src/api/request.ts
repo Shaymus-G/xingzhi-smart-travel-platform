@@ -12,6 +12,19 @@ const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 /** 请求超时时间 (ms) */
 const TIMEOUT = 15000
 
+/** 防止 401 时多次 reLaunch */
+let _authRedirecting = false
+
+/**
+ * 类型桥接辅助 — 将任意接口类型转为 Record<string, unknown>
+ *
+ * TypeScript 严格模式下，不带索引签名的 interface/type 无法直接赋值给
+ * Record<string, unknown>，此函数在 http 层集中处理转换。
+ */
+export function toBody<T>(data: T): Record<string, unknown> {
+  return data as unknown as Record<string, unknown>
+}
+
 /**
  * 发起 HTTP 请求
  *
@@ -48,11 +61,17 @@ export async function request<T = unknown>(
         const statusCode = res.statusCode
         const body = res.data as Record<string, unknown>
 
-        // 401 / 403 — 清除登录态并跳转登录页
+        // 401 / 403 — 清除登录态并跳转登录页（防重入）
         if (statusCode === 401 || statusCode === 403) {
-          clearAuthStorage()
-          uni.showToast({ title: '登录已过期，请重新登录', icon: 'none' })
-          uni.reLaunch({ url: '/pages/auth/login' })
+          if (!_authRedirecting) {
+            _authRedirecting = true
+            clearAuthStorage()
+            uni.showToast({ title: '登录已过期，请重新登录', icon: 'none' })
+            uni.reLaunch({
+              url: '/pages/auth/login',
+              complete: () => { _authRedirecting = false },
+            })
+          }
           reject(new Error('登录已过期，请重新登录'))
           return
         }
@@ -90,6 +109,7 @@ export async function request<T = unknown>(
         resolve(body as unknown as T)
       },
       fail(err) {
+        console.error('[request] network error:', JSON.stringify(err))
         reject(new Error(err.errMsg || '网络异常，请检查网络连接'))
       },
     })
@@ -98,18 +118,21 @@ export async function request<T = unknown>(
 
 /**
  * 便捷方法
+ *
+ * http.get<User[]>('/api/users/me')
+ * http.post<LoginResult>('/api/users/login', { username, password })
  */
 export const http = {
-  get<T = unknown>(url: string, params?: Record<string, unknown>): Promise<T> {
-    return request<T>(url, { method: 'GET', data: params })
+  get<TRes = unknown>(url: string, params?: Record<string, unknown>): Promise<TRes> {
+    return request<TRes>(url, { method: 'GET', data: params })
   },
-  post<T = unknown>(url: string, data?: Record<string, unknown>): Promise<T> {
-    return request<T>(url, { method: 'POST', data })
+  post<TRes = unknown>(url: string, data?: Record<string, unknown>): Promise<TRes> {
+    return request<TRes>(url, { method: 'POST', data })
   },
-  put<T = unknown>(url: string, data?: Record<string, unknown>): Promise<T> {
-    return request<T>(url, { method: 'PUT', data })
+  put<TRes = unknown>(url: string, data?: Record<string, unknown>): Promise<TRes> {
+    return request<TRes>(url, { method: 'PUT', data })
   },
-  delete<T = unknown>(url: string, params?: Record<string, unknown>): Promise<T> {
-    return request<T>(url, { method: 'DELETE', data: params })
+  delete<TRes = unknown>(url: string, params?: Record<string, unknown>): Promise<TRes> {
+    return request<TRes>(url, { method: 'DELETE', data: params })
   },
 }
