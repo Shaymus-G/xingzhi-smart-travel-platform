@@ -50,6 +50,13 @@
       }
     },
     {
+      "path": "pages/profile/favorites",
+      "style": {
+        "navigationBarTitleText": "我的收藏",
+        "navigationStyle": "custom"
+      }
+    },
+    {
       "path": "pages/plan/list",
       "style": {
         "navigationBarTitleText": "旅行计划",

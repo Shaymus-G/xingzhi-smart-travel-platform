@@ -2,41 +2,54 @@
  * 社交互动相关类型定义（对应后端 app/schemas/social.py）
  */
 
-/** 收藏目标类型 */
-export type FavoriteTargetType = 'scenic_spot' | 'hotel' | 'restaurant'
+// ==================== 通用 ====================
 
-/** 收藏 */
-export interface FavoriteCreate {
-  target_type: FavoriteTargetType
-  target_id: number
-}
+export type TargetType = 'scenic_spot' | 'hotel' | 'restaurant'
 
-export interface FavoriteResponse {
+// ==================== Favorite ====================
+
+export interface Favorite {
   id: number
-  user_id: number
-  target_type: string
+  user_id?: number
+  target_type: TargetType
   target_id: number
-  created_at: string
+  created_at?: string
+  target?: unknown  // 后端可能内联返回目标详情
 }
 
-/** 评论目标类型 */
-export type ReviewTargetType = 'scenic_spot' | 'hotel' | 'restaurant'
+export interface CreateFavoriteParams {
+  target_type: TargetType
+  target_id: number
+}
 
-/** 评论 */
-export interface ReviewCreate {
-  target_type: ReviewTargetType
+// ==================== Review ====================
+
+export interface ReviewUser {
+  id?: number
+  username?: string
+  avatar?: string | null
+}
+
+export interface Review {
+  id: number
+  user_id?: number
+  target_type: TargetType
   target_id: number
   content: string
+  score: number | string  // 后端可能返回 number 或 string
+  created_at?: string
+  updated_at?: string
+  user?: ReviewUser | null
+}
+
+export interface CreateReviewParams {
+  target_type: TargetType
+  target_id: number
+  content: string
+  score: number
+}
+
+export interface UpdateReviewParams {
+  content?: string
   score?: number
-}
-
-export interface ReviewResponse {
-  id: number
-  user_id: number
-  target_type: string
-  target_id: number
-  content: string
-  score: number | null
-  created_at: string
-  updated_at: string
 }

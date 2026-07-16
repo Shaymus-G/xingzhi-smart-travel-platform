@@ -42,7 +42,7 @@ interface MenuItem {
 
 const menuItems: MenuItem[] = [
   { icon: '📋', title: '我的旅行计划', path: '/pages/plan/list' },
-  { icon: '❤️', title: '我的收藏', path: '' },
+  { icon: '❤️', title: '我的收藏', path: '/pages/profile/favorites' },
   { icon: '⭐', title: '我的评论', path: '' },
   { icon: '⚙️', title: '偏好设置', path: '' },
 ]

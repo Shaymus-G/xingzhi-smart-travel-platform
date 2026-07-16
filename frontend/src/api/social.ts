@@ -3,52 +3,54 @@
  */
 import { http, toBody } from './request'
 import type {
-  FavoriteCreate,
-  FavoriteResponse,
-  ReviewCreate,
-  ReviewResponse,
+  TargetType,
+  Favorite,
+  CreateFavoriteParams,
+  Review,
+  CreateReviewParams,
+  UpdateReviewParams,
 } from '@/types/social'
 
 // ==================== Favorite ====================
 
-/** 我的收藏列表 */
-export function getMyFavorites(params?: { skip?: number; limit?: number }) {
-  return http.get<FavoriteResponse[]>('/api/social/favorites', params)
+/** 获取我的收藏列表 */
+export function getFavorites(params?: { skip?: number; limit?: number }): Promise<Favorite[]> {
+  return http.get<Favorite[]>('/api/social/favorites', params)
 }
 
 /** 添加收藏 */
-export function addFavorite(data: FavoriteCreate) {
-  return http.post<FavoriteResponse>('/api/social/favorites', toBody(data))
+export function addFavorite(data: CreateFavoriteParams): Promise<Favorite> {
+  return http.post<Favorite>('/api/social/favorites', toBody(data))
 }
 
 /** 取消收藏 */
-export function removeFavorite(favoriteId: number) {
-  return http.delete(`/api/social/favorites/${favoriteId}`)
+export function deleteFavorite(id: number): Promise<void> {
+  return http.delete(`/api/social/favorites/${id}`)
 }
 
 // ==================== Review ====================
 
 /** 获取目标评论列表 */
 export function getReviews(params: {
-  target_type: string
+  target_type: TargetType
   target_id: number
   skip?: number
   limit?: number
-}) {
-  return http.get<ReviewResponse[]>('/api/social/reviews', params)
+}): Promise<Review[]> {
+  return http.get<Review[]>('/api/social/reviews', params)
 }
 
 /** 发表评论 */
-export function createReview(data: ReviewCreate) {
-  return http.post<ReviewResponse>('/api/social/reviews', toBody(data))
+export function createReview(data: CreateReviewParams): Promise<Review> {
+  return http.post<Review>('/api/social/reviews', toBody(data))
 }
 
 /** 更新评论 */
-export function updateReview(reviewId: number, data: { content?: string; score?: number }) {
-  return http.put<ReviewResponse>(`/api/social/reviews/${reviewId}`, toBody(data))
+export function updateReview(id: number, data: UpdateReviewParams): Promise<Review> {
+  return http.put<Review>(`/api/social/reviews/${id}`, toBody(data))
 }
 
 /** 删除评论 */
-export function deleteReview(reviewId: number) {
-  return http.delete(`/api/social/reviews/${reviewId}`)
+export function deleteReview(id: number): Promise<void> {
+  return http.delete(`/api/social/reviews/${id}`)
 }
