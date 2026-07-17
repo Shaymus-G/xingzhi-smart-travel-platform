@@ -3,6 +3,7 @@
  * 城市详情页 — 展示城市信息 + 景点/酒店/餐厅
  */
 import { ref, onMounted } from 'vue'
+import { onLoad, onShow, onReady } from '@dcloudio/uni-app'
 import NavBar from '@/components/NavBar.vue'
 import ScenicCard from '@/components/ScenicCard.vue'
 import EmptyState from '@/components/EmptyState.vue'
@@ -61,10 +62,8 @@ function onRestaurantTap(_id: number) {
 }
 
 // ========== 生命周期 ==========
-onMounted(() => {
-  const pages = getCurrentPages()
-  const currentPage = pages[pages.length - 1] as Record<string, unknown>
-  const options = (currentPage?.options || {}) as Record<string, string>
+onLoad((options: any) => {
+  console.log('[city/detail] onLoad options:', JSON.stringify(options))
   const id = Number(options?.id)
   if (!id || isNaN(id)) {
     uni.showToast({ title: '城市ID无效', icon: 'none' })
@@ -74,11 +73,20 @@ onMounted(() => {
   cityId.value = id
   loadAll()
 })
+
+onShow(() => {
+  console.log('[city/detail] onShow, cityId:', cityId.value)
+})
+
+onReady(() => {
+  console.log('[city/detail] onReady')
+})
 </script>
 
 <template>
   <view class="city-detail-page">
     <NavBar :title="city?.name || '城市详情'" :show-back="true" />
+    <view class="debug-title">城市详情页 id={{ cityId }}</view>
 
     <scroll-view class="city-scroll" scroll-y enhanced :show-scrollbar="false">
       <Loading :visible="loading" />
@@ -193,6 +201,14 @@ onMounted(() => {
 </template>
 
 <style lang="scss" scoped>
+.debug-title {
+  background: #FF6B35;
+  color: #fff;
+  font-size: 24rpx;
+  padding: 8rpx 24rpx;
+  text-align: center;
+}
+
 .city-detail-page {
   height: 100vh;
   display: flex;

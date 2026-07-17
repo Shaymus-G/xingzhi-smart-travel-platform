@@ -6,12 +6,8 @@
  */
 import { getToken, clearAuthStorage } from '@/utils/storage'
 
-/** 后端 API 基础地址 — 兼容 Vite (import.meta.env) 与 HBuilderX 原生运行时 */
-const ENV_BASE_URL =
-  typeof import.meta !== 'undefined' && (import.meta as unknown as Record<string, unknown>)?.env
-    ? ((import.meta as unknown as Record<string, Record<string, string>>).env.VITE_API_BASE_URL)
-    : ''
-const BASE_URL = ENV_BASE_URL || 'http://10.136.3.202:8000'
+/** 后端 API 基础地址 */
+const BASE_URL = 'http://10.136.3.202:8000'
 
 /** 请求超时时间 (ms) */
 const TIMEOUT = 15000

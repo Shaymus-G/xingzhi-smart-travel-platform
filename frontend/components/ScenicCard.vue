@@ -26,7 +26,7 @@ const props = withDefaults(defineProps<Props>(), {
 })
 
 const emit = defineEmits<{
-  click: [scenicId: number]
+  (e: 'click', scenicId: number): void
 }>()
 
 const FALLBACK_IMAGE = '/static/logo.png'
@@ -49,10 +49,15 @@ const showScore = computed(() => {
 })
 
 const showPrice = computed(() => formatNum(props.price, '¥'))
+
+function handleTap() {
+  console.log('[ScenicCard] tapped, scenicId:', props.scenicId)
+  emit('click', props.scenicId)
+}
 </script>
 
 <template>
-  <view class="scenic-card" @tap="emit('click', scenicId)">
+  <view class="scenic-card" @tap.stop="handleTap">
     <image
       class="scenic-card-image"
       :src="getImage(imageUrl)"

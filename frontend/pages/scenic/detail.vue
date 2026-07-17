@@ -2,7 +2,8 @@
 /**
  * 景点详情页 — 信息展示 + 收藏 + 评论
  */
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
+import { onLoad, onShow, onReady } from '@dcloudio/uni-app'
 import NavBar from '@/components/NavBar.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import Loading from '@/components/Loading.vue'
@@ -180,10 +181,8 @@ async function submitReview() {
 }
 
 // ========== 生命周期 ==========
-onMounted(() => {
-  const pages = getCurrentPages()
-  const currentPage = pages[pages.length - 1] as Record<string, unknown>
-  const options = (currentPage?.options || {}) as Record<string, string>
+onLoad((options: any) => {
+  console.log('[scenic/detail] onLoad options:', JSON.stringify(options))
   const id = Number(options?.id)
   if (!id || isNaN(id)) {
     uni.showToast({ title: '景点ID无效', icon: 'none' })
@@ -195,11 +194,20 @@ onMounted(() => {
     loadFavoriteStatus()
   })
 })
+
+onShow(() => {
+  console.log('[scenic/detail] onShow, scenicId:', scenicId.value)
+})
+
+onReady(() => {
+  console.log('[scenic/detail] onReady')
+})
 </script>
 
 <template>
   <view class="scenic-detail-page">
     <NavBar title="景点详情" :show-back="true" />
+    <view class="debug-title">景点详情页 id={{ scenicId }}</view>
 
     <scroll-view class="scenic-scroll" scroll-y enhanced :show-scrollbar="false">
       <Loading :visible="loading" />
@@ -315,6 +323,14 @@ onMounted(() => {
 </template>
 
 <style lang="scss" scoped>
+.debug-title {
+  background: #FF6B35;
+  color: #fff;
+  font-size: 24rpx;
+  padding: 8rpx 24rpx;
+  text-align: center;
+}
+
 .scenic-detail-page {
   height: 100vh;
   display: flex;

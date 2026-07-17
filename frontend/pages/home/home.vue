@@ -61,12 +61,118 @@ function onLevelChange(level: string) {
   loadCities()
 }
 
-function goCityDetail(id: number) {
-  uni.navigateTo({ url: `/pages/city/detail?id=${id}` })
+let navigating = false
+
+function resetNavigating() {
+  setTimeout(() => {
+    navigating = false
+    console.log('[home] navigation lock released')
+  }, 800)
 }
 
-function goScenicDetail(id: number) {
-  uni.navigateTo({ url: `/pages/scenic/detail?id=${id}` })
+function logPageStack(stage: string) {
+  try {
+    const pages = getCurrentPages()
+    console.log(`[home] page stack ${stage}:`, pages.map((p: any) => p.route))
+  } catch (err) {
+    console.warn('[home] getCurrentPages failed:', err)
+  }
+}
+
+function goCityDetail(id: number | string) {
+  const cityId = Number(id)
+  if (!Number.isFinite(cityId) || cityId <= 0) {
+    uni.showToast({ title: '城市 ID 无效', icon: 'none' })
+    return
+  }
+
+  if (navigating) {
+    console.log('[home] navigation locked, ignore city tap:', cityId)
+    return
+  }
+  navigating = true
+
+  const primaryUrl = `/pages/city/detail?id=${cityId}`
+  const fallbackUrl = `pages/city/detail?id=${cityId}`
+  console.log('[home] goCityDetail:', cityId, 'primaryUrl:', primaryUrl)
+  logPageStack('before city navigateTo')
+
+  uni.navigateTo({
+    url: primaryUrl,
+    success(res) {
+      console.log('[home] navigate city/detail success:', JSON.stringify(res))
+      logPageStack('after city navigateTo success')
+    },
+    fail(err) {
+      console.error('[home] navigate city/detail primary failed:', JSON.stringify(err))
+      // 尝试不带前导斜杠的 fallback
+      uni.navigateTo({
+        url: fallbackUrl,
+        success(res2) {
+          console.log('[home] navigate city/detail fallback success:', JSON.stringify(res2))
+        },
+        fail(err2) {
+          console.error('[home] navigate city/detail fallback failed:', JSON.stringify(err2))
+          uni.showToast({ title: '页面跳转失败', icon: 'none' })
+        },
+        complete() {
+          resetNavigating()
+        },
+      })
+    },
+    complete(res) {
+      console.log('[home] navigate city/detail primary complete:', JSON.stringify(res))
+      // 如果 primary success 已调用 resetNavigating，这里做兜底
+      if (navigating) resetNavigating()
+    },
+  })
+}
+
+function goScenicDetail(id: number | string) {
+  const scenicId = Number(id)
+  if (!Number.isFinite(scenicId) || scenicId <= 0) {
+    uni.showToast({ title: '景点 ID 无效', icon: 'none' })
+    return
+  }
+
+  if (navigating) {
+    console.log('[home] navigation locked, ignore scenic tap:', scenicId)
+    return
+  }
+  navigating = true
+
+  const primaryUrl = `/pages/scenic/detail?id=${scenicId}`
+  const fallbackUrl = `pages/scenic/detail?id=${scenicId}`
+  console.log('[home] goScenicDetail:', scenicId, 'primaryUrl:', primaryUrl)
+  logPageStack('before scenic navigateTo')
+
+  uni.navigateTo({
+    url: primaryUrl,
+    success(res) {
+      console.log('[home] navigate scenic/detail success:', JSON.stringify(res))
+      logPageStack('after scenic navigateTo success')
+    },
+    fail(err) {
+      console.error('[home] navigate scenic/detail primary failed:', JSON.stringify(err))
+      uni.navigateTo({
+        url: fallbackUrl,
+        success(res2) {
+          console.log('[home] navigate scenic/detail fallback success:', JSON.stringify(res2))
+        },
+        fail(err2) {
+          console.error('[home] navigate scenic/detail fallback failed:', JSON.stringify(err2))
+          uni.showToast({ title: '页面跳转失败', icon: 'none' })
+        },
+        complete() {
+          resetNavigating()
+        },
+      })
+    },
+    complete(res) {
+      console.log('[home] navigate scenic/detail primary complete:', JSON.stringify(res))
+      if (navigating) resetNavigating()
+    },
+  })
 }
 
 function goAiChat() {

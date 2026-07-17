@@ -12,7 +12,7 @@ interface Props {
   description?: string | null
 }
 
-withDefaults(defineProps<Props>(), {
+const props = withDefaults(defineProps<Props>(), {
   province: '',
   coverImage: '',
   level: '',
@@ -20,7 +20,7 @@ withDefaults(defineProps<Props>(), {
 })
 
 const emit = defineEmits<{
-  click: [cityId: number]
+  (e: 'click', cityId: number): void
 }>()
 
 /** 图片兜底 */
@@ -35,10 +35,15 @@ function truncate(text?: string | null, max = 50): string {
   if (!text) return ''
   return text.length > max ? text.slice(0, max) + '...' : text
 }
+
+function handleTap() {
+  console.log('[CityCard] tapped, cityId:', props.cityId)
+  emit('click', props.cityId)
+}
 </script>
 
 <template>
-  <view class="city-card" @tap="emit('click', cityId)">
+  <view class="city-card" @tap.stop="handleTap">
     <image
       class="city-card-image"
       :src="getImage(coverImage)"

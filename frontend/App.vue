@@ -16,7 +16,7 @@ onHide(() => {
 
 <style lang="scss">
 /* 全局样式 */
-@use '@/styles/common.scss' as *;
+@use './styles/common.scss' as *;
 
 /* 每个页面公共css */
 page {
