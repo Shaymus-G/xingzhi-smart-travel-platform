@@ -12,6 +12,8 @@ class Settings(BaseSettings):
 
     SECRET_KEY:str
 
+    OPENWEATHER_KEY:str = ""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         encoding="utf-8"

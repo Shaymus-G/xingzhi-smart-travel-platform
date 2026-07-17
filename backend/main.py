@@ -14,14 +14,7 @@ app = FastAPI(
 # CORS — 允许前端 H5 开发服务器跨域访问
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5174",
-        "http://localhost:8080",
-        "http://127.0.0.1:8080",
-    ],
+    allow_origins=["*"],  # 开发阶段允许所有来源，部署时收紧
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
