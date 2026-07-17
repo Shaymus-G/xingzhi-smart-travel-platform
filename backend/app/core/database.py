@@ -18,10 +18,16 @@ DATABASE_URL = (
     "?charset=utf8mb4"
 )
 
+# TiDB Cloud SSL 连接配置
+_connect_args = {}
+if "tidbcloud" in settings.MYSQL_HOST:
+    _connect_args = {"ssl": {"fake_flag": True}}
+
 engine = create_engine(
     DATABASE_URL,
     echo=settings.DEBUG,
     pool_pre_ping=True,
+    connect_args=_connect_args,
 )
 
 SessionLocal = sessionmaker(
