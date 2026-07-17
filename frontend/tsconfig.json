@@ -14,15 +14,21 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./*"]
     },
     "types": ["@dcloudio/types", "@uni-helper/uni-app-types"]
   },
   "include": [
-    "src/**/*.ts",
-    "src/**/*.d.ts",
-    "src/**/*.vue",
-    "*.d.ts"
+    "*.ts",
+    "*.vue",
+    "*.d.ts",
+    "pages/**/*.vue",
+    "api/**/*.ts",
+    "types/**/*.ts",
+    "stores/**/*.ts",
+    "components/**/*.vue",
+    "utils/**/*.ts",
+    "styles/**/*.scss"
   ],
   "exclude": ["node_modules", "dist", "unpackage"]
 }
