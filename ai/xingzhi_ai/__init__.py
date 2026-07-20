@@ -47,6 +47,13 @@ from xingzhi_ai.travel_context import (
     build_travel_context_block,
 )
 
+# P3: 旅行计划生成
+from xingzhi_ai.plan_schema import StructuredTravelPlan
+from xingzhi_ai.plan_parser import extract_and_parse_json, PlanParseError
+from xingzhi_ai.plan_validation import validate_plan_resources, ValidationResult
+from xingzhi_ai.plan_renderer import render_travel_plan_markdown
+from xingzhi_ai.plan_prompts import build_plan_system_prompt
+
 __all__ = [
     # Exceptions
     "AIServiceError",
@@ -78,4 +85,12 @@ __all__ = [
     "WeatherInfo",
     "TravelContext",
     "build_travel_context_block",
+    # P3: Plan Generation
+    "StructuredTravelPlan",
+    "extract_and_parse_json",
+    "PlanParseError",
+    "validate_plan_resources",
+    "ValidationResult",
+    "render_travel_plan_markdown",
+    "build_plan_system_prompt",
 ]

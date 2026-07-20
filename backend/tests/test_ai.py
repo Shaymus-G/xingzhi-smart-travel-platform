@@ -497,3 +497,141 @@ class TestWeatherTriggerMultiTurn:
         object.__setattr__(s, "OPENWEATHER_KEY", "test-key")
         # 当前消息不含触发关键词
         assert _should_query_weather("还有哪些地方值得去", s) is False
+
+
+# ==================== P3: 计划生成 Schema 测试 ====================
+
+
+class TestPlanGenerateRequestSchema:
+    """P3 计划生成请求 Schema"""
+
+    def test_valid_request(self):
+        from app.schemas.ai import PlanGenerateRequest
+        req = PlanGenerateRequest(destination="杭州", days=3, budget=3000)
+        assert req.destination == "杭州"
+        assert req.days == 3
+
+    def test_destination_required(self):
+        from app.schemas.ai import PlanGenerateRequest
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            PlanGenerateRequest(days=3)
+
+    def test_days_minimum(self):
+        from app.schemas.ai import PlanGenerateRequest
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            PlanGenerateRequest(destination="杭州", days=0)
+
+    def test_days_maximum(self):
+        from app.schemas.ai import PlanGenerateRequest
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            PlanGenerateRequest(destination="杭州", days=11)
+
+    def test_budget_negative_rejected(self):
+        from app.schemas.ai import PlanGenerateRequest
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            PlanGenerateRequest(destination="杭州", days=3, budget=-100)
+
+    def test_travelers_invalid(self):
+        from app.schemas.ai import PlanGenerateRequest
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            PlanGenerateRequest(destination="杭州", days=3, travelers=0)
+
+    def test_destination_strip(self):
+        from app.schemas.ai import PlanGenerateRequest
+        req = PlanGenerateRequest(destination="  杭州  ", days=3)
+        assert req.destination == "杭州"
+
+    def test_preferences_max(self):
+        from app.schemas.ai import PlanGenerateRequest
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            PlanGenerateRequest(destination="杭州", days=3,
+                              preferences=["a"] * 11)
+
+    def test_defaults(self):
+        from app.schemas.ai import PlanGenerateRequest
+        req = PlanGenerateRequest(destination="杭州", days=3)
+        assert req.travelers == 1
+        assert req.budget is None
+        assert req.preferences is None
+        assert req.start_date is None
+        assert req.notes is None
+
+
+# ==================== P3: PlanGenerationError 测试 ====================
+
+
+class TestPlanGenerationError:
+    def test_error_message(self):
+        from app.services.ai_plan_service import PlanGenerationError
+        e = PlanGenerationError("平台中未找到该目的地城市")
+        assert "未找到" in e.message
+
+
+# ==================== P3: 资源验证测试 ====================
+
+
+class TestPlanValidation:
+    def test_validation_result_valid(self):
+        from xingzhi_ai.plan_validation import ValidationResult
+        vr = ValidationResult(is_valid=True)
+        assert vr.is_valid is True
+        assert vr.errors == []
+
+    def test_validation_result_invalid(self):
+        from xingzhi_ai.plan_validation import ValidationResult
+        vr = ValidationResult(is_valid=False, errors=["Bad ID"])
+        assert vr.is_valid is False
+        assert len(vr.errors) == 1
+
+
+# ==================== P3: ORM 转换含 ID 测试 ====================
+
+
+class TestOrmToDictWithId:
+    """P3 需要 ORM 转换包含 ID 字段"""
+
+    def test_scenic_has_id(self):
+        from app.services.ai_service import _orm_scenic_to_dict
+        mock = MagicMock()
+        mock.id = 123
+        mock.name = "西湖"
+        mock.category = "自然风光"
+        mock.score = 4.8
+        mock.price = 0.0
+        mock.open_time = "全天"
+        mock.tags_json = {}
+        mock.address = "杭州"
+        mock.description = "著名景点"
+        result = _orm_scenic_to_dict(mock)
+        assert result["id"] == 123
+
+    def test_hotel_has_id(self):
+        from app.services.ai_service import _orm_hotel_to_dict
+        mock = MagicMock()
+        mock.id = 456
+        mock.name = "某酒店"
+        mock.score = 4.0
+        mock.price = 300.0
+        mock.address = "某地"
+        mock.description = "好酒店"
+        result = _orm_hotel_to_dict(mock)
+        assert result["id"] == 456
+
+    def test_restaurant_has_id(self):
+        from app.services.ai_service import _orm_restaurant_to_dict
+        mock = MagicMock()
+        mock.id = 789
+        mock.name = "某餐厅"
+        mock.category = "中餐"
+        mock.score = 4.2
+        mock.price_level = "中等"
+        mock.address = "某地"
+        mock.description = "好餐厅"
+        result = _orm_restaurant_to_dict(mock)
+        assert result["id"] == 789

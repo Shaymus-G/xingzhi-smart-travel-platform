@@ -151,11 +151,12 @@ def _create_client(settings: Settings) -> DeepSeekChatClient:
 
 
 def _orm_scenic_to_dict(spot) -> dict:
-    """ScenicSpot ORM → 普通 dict（安全序列化，不含内部字段）"""
+    """ScenicSpot ORM → 普通 dict（安全序列化，含 ID 供 P3 计划引用）"""
     tags = ""
     if getattr(spot, "tags_json", None) and isinstance(spot.tags_json, dict):
         tags = ", ".join(str(v) for v in spot.tags_json.values())
     return {
+        "id": spot.id,
         "name": spot.name,
         "category": getattr(spot, "category", "") or "",
         "score": float(spot.score) if getattr(spot, "score", None) is not None else None,
@@ -168,8 +169,9 @@ def _orm_scenic_to_dict(spot) -> dict:
 
 
 def _orm_hotel_to_dict(hotel) -> dict:
-    """Hotel ORM → 普通 dict"""
+    """Hotel ORM → 普通 dict（含 ID 供 P3 计划引用）"""
     return {
+        "id": hotel.id,
         "name": hotel.name,
         "score": float(hotel.score) if getattr(hotel, "score", None) is not None else None,
         "price": float(hotel.price) if getattr(hotel, "price", None) is not None else None,
@@ -179,8 +181,9 @@ def _orm_hotel_to_dict(hotel) -> dict:
 
 
 def _orm_restaurant_to_dict(restaurant) -> dict:
-    """Restaurant ORM → 普通 dict"""
+    """Restaurant ORM → 普通 dict（含 ID 供 P3 计划引用）"""
     return {
+        "id": restaurant.id,
         "name": restaurant.name,
         "category": getattr(restaurant, "category", "") or "",
         "score": float(restaurant.score) if getattr(restaurant, "score", None) is not None else None,

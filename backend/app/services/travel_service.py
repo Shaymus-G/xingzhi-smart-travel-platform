@@ -244,7 +244,11 @@ def get_plans_by_user(db: Session, user_id: int, skip: int = 0, limit: int = 20)
 def create_plan(db: Session, user_id: int, **kwargs) -> TravelPlan:
     plan = TravelPlan(user_id=user_id, **kwargs)
     db.add(plan)
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(plan)
     return plan
 
