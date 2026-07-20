@@ -1,10 +1,12 @@
 """
-行知 AI 核心包 — DeepSeek 客户端、Prompt 模板、上下文管理
+行知 AI 核心包 — DeepSeek 客户端、Prompt 模板、上下文管理、城市识别、旅游数据
 
 导入方式:
     from xingzhi_ai.client import DeepSeekChatClient
     from xingzhi_ai.prompts import build_system_prompt
-    from xingzhi_ai.context import ChatMessage, trim_context
+    from xingzhi_ai.context import ChatMessage, trim_context, build_messages_with_travel_context
+    from xingzhi_ai.location import CityCandidate, find_mentioned_city, normalize_city_name
+    from xingzhi_ai.travel_context import TravelContext, build_travel_context_block
     from xingzhi_ai.exceptions import (
         AIServiceError,
         AIConfigurationError,
@@ -26,6 +28,23 @@ from xingzhi_ai.context import (
     filter_valid_messages,
     trim_context,
     build_messages_with_system_prompt,
+    build_messages_with_travel_context,
+)
+from xingzhi_ai.location import (
+    CityCandidate,
+    normalize_city_name,
+    find_mentioned_city,
+    resolve_city_from_conversation,
+    resolve_weather_city_name,
+)
+from xingzhi_ai.travel_context import (
+    ScenicInfo,
+    HotelInfo,
+    RestaurantInfo,
+    PreferenceInfo,
+    WeatherInfo,
+    TravelContext,
+    build_travel_context_block,
 )
 
 __all__ = [
@@ -44,4 +63,19 @@ __all__ = [
     "filter_valid_messages",
     "trim_context",
     "build_messages_with_system_prompt",
+    "build_messages_with_travel_context",
+    # Location
+    "CityCandidate",
+    "normalize_city_name",
+    "find_mentioned_city",
+    "resolve_city_from_conversation",
+    "resolve_weather_city_name",
+    # Travel Context
+    "ScenicInfo",
+    "HotelInfo",
+    "RestaurantInfo",
+    "PreferenceInfo",
+    "WeatherInfo",
+    "TravelContext",
+    "build_travel_context_block",
 ]

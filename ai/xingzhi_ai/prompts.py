@@ -1,4 +1,9 @@
-"""系统提示词管理 — 集中维护，避免散落在路由或 Service 中"""
+"""系统提示词管理 — 集中维护，避免散落在路由或 Service 中
+
+P2 新增：Grounding 安全规则注入。
+"""
+
+from xingzhi_ai.travel_context import build_grounding_rules
 
 
 SYSTEM_PROMPT = """
@@ -25,6 +30,13 @@ SYSTEM_PROMPT = """
 """.strip()
 
 
-def build_system_prompt() -> str:
-    """返回系统提示词"""
+def build_system_prompt(*, with_grounding: bool = False) -> str:
+    """返回系统提示词。
+
+    Args:
+        with_grounding: 是否附加 Grounding 安全规则。
+            在 P2 旅游数据增强模式下应设为 True。
+    """
+    if with_grounding:
+        return SYSTEM_PROMPT + "\n\n" + build_grounding_rules()
     return SYSTEM_PROMPT

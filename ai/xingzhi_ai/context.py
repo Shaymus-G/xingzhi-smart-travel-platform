@@ -1,6 +1,8 @@
 """上下文管理 — 消息过滤、裁剪、组装
 
 纯函数，不依赖数据库或外部服务，可独立测试。
+
+P2 新增：旅游上下文注入。
 """
 
 from xingzhi_ai.types import ChatMessage
@@ -130,18 +132,88 @@ def build_messages_with_system_prompt(
     *,
     max_messages: int = DEFAULT_MAX_MESSAGES,
     max_chars: int = DEFAULT_MAX_CHARS,
+    with_grounding: bool = False,
 ) -> list[ChatMessage]:
     """完整的上下文构建流程。
 
     步骤：
         1. 过滤历史消息
         2. 裁剪上下文
-        3. 添加 system prompt
+        3. 添加 system prompt（可选 grounding 规则）
         4. 添加当前消息（确保不重复）
 
     Args:
         history: 数据库中的历史消息列表（按时间正序）。
         current_message: 用户当前消息。
+        max_messages: 最大非 system 消息数。
+        max_chars: 最大非 system 字符数。
+        with_grounding: 是否附加 Grounding 安全规则（P2）。
+
+    Returns:
+        完整的 messages 列表，可直接传给 DeepSeek API。
+    """
+    # 1. 过滤
+    filtered = filter_valid_messages(history)
+
+    # 2. 裁剪
+    trimmed = trim_context(
+        filtered,
+        max_messages=max_messages,
+        max_chars=max_chars,
+        preserve_latest_user=True,
+    )
+
+    # 3. 构建最终消息列表
+    result: list[ChatMessage] = []
+
+    # 添加 system prompt（如果还没有）
+    system_prompt = build_system_prompt(with_grounding=with_grounding)
+    has_system = any(msg.get("role") == "system" for msg in trimmed)
+    if not has_system:
+        result.append(ChatMessage(role="system", content=system_prompt))
+
+    # 添加裁剪后的历史
+    result.extend(trimmed)
+
+    # 4. 添加当前消息（避免重复：检查是否已有内容相同的 user 消息）
+    current_content = current_message.get("content", "").strip()
+    is_duplicate = any(
+        m.get("role") == "user"
+        and m.get("content", "").strip() == current_content
+        for m in result
+    )
+
+    if not is_duplicate:
+        result.append(current_message)
+
+    return result
+
+
+def build_messages_with_travel_context(
+    history: list[ChatMessage],
+    current_message: ChatMessage,
+    travel_context_block: str,
+    *,
+    max_messages: int = DEFAULT_MAX_MESSAGES,
+    max_chars: int = DEFAULT_MAX_CHARS,
+) -> list[ChatMessage]:
+    """P2 增强上下文构建：包含旅游数据块和 Grounding 规则。
+
+    与 build_messages_with_system_prompt 的区别：
+    - 系统提示词会附加 Grounding 安全规则
+    - 系统提示词中不嵌入旅游数据块（数据块作为独立 system message）
+    - 保持历史消息和当前消息的裁剪逻辑不变
+
+    消息结构：
+        [0] system: 基础系统提示词 + Grounding 规则
+        [1] system: 旅游数据块（如果非空）
+        [2..N-1] 裁剪后的历史消息
+        [N] 当前用户消息
+
+    Args:
+        history: 数据库中的历史消息列表（按时间正序）。
+        current_message: 用户当前消息。
+        travel_context_block: 构建好的旅游数据文本块（可能为空）。
         max_messages: 最大非 system 消息数。
         max_chars: 最大非 system 字符数。
 
@@ -162,16 +234,20 @@ def build_messages_with_system_prompt(
     # 3. 构建最终消息列表
     result: list[ChatMessage] = []
 
-    # 添加 system prompt（如果还没有）
-    system_prompt = build_system_prompt()
+    # 3a. 主 system prompt（含 Grounding 规则）
+    system_prompt = build_system_prompt(with_grounding=True)
     has_system = any(msg.get("role") == "system" for msg in trimmed)
     if not has_system:
         result.append(ChatMessage(role="system", content=system_prompt))
 
+    # 3b. 旅游数据块作为独立 system message（不伪装成用户消息）
+    if travel_context_block.strip():
+        result.append(ChatMessage(role="system", content=travel_context_block.strip()))
+
     # 添加裁剪后的历史
     result.extend(trimmed)
 
-    # 4. 添加当前消息（避免重复：检查是否已有内容相同的 user 消息）
+    # 4. 添加当前消息
     current_content = current_message.get("content", "").strip()
     is_duplicate = any(
         m.get("role") == "user"
