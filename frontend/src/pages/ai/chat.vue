@@ -1,65 +1,263 @@
 <script setup lang="ts">
 /**
  * AI 对话页面 — 接入后端 DeepSeek 真实接口
+ *
+ * 功能：
+ *  - 登录保护（onShow + 发送前）
+ *  - 历史消息加载（去重、失败降级）
+ *  - 消息发送 / 失败标记 / 重试
+ *  - 自动滚动到底部
+ *  - 页面生命周期保护
  */
 import { ref, nextTick } from 'vue'
+import { onShow, onHide, onUnload } from '@dcloudio/uni-app'
 import NavBar from '@/components/NavBar.vue'
-import { sendChatMessage } from '@/api/ai'
+import { sendChatMessage, getAISessions } from '@/api/ai'
+import { useUserStore } from '@/stores/user'
+import type { ChatMessage } from '@/types/ai'
 
-interface ChatMessage {
-  id: number
-  role: 'user' | 'assistant'
-  content: string
-}
+const userStore = useUserStore()
 
-const messages = ref<ChatMessage[]>([
-  { id: 0, role: 'assistant', content: '你好！我是行知 AI 旅行助手，有什么可以帮助你的吗？' },
-])
+// ========== 消息状态 ==========
+const messages = ref<ChatMessage[]>([])
 const inputText = ref('')
 const isSending = ref(false)
-const currentSessionId = ref<number | undefined>(undefined)
 
+// ========== 历史加载状态 ==========
+const historyLoading = ref(false)
+const historyLoaded = ref(false)
+const historyError = ref('')
+
+// ========== 滚动 ==========
+const scrollIntoViewId = ref('')
+const SCROLL_ANCHOR = 'chat-bottom-anchor'
+
+// ========== 生命周期 ==========
+let pageActive = false
+let localIdCounter = 0
+
+// ========== 本地消息 ID 工具 ==========
+function nextLocalId(): string {
+  return `_local_${Date.now()}_${++localIdCounter}`
+}
+
+function isLocalId(id: number | string): boolean {
+  return typeof id === 'string' && id.startsWith('_local_')
+}
+
+// ========== 欢迎消息 ==========
+function ensureWelcomeMessage() {
+  if (messages.value.length === 0) {
+    messages.value.push({
+      id: 0,
+      role: 'assistant',
+      content: '你好！我是行知 AI 旅行助手，有什么可以帮助你的吗？',
+    })
+  }
+}
+
+// ========== 历史消息加载 ==========
+async function loadHistory() {
+  if (historyLoading.value || !userStore.isLoggedIn) return
+
+  historyLoading.value = true
+  historyError.value = ''
+
+  try {
+    const sessions = await getAISessions({ limit: 50 })
+
+    if (!pageActive) return
+
+    // 构建已有服务端消息 ID 集合（用于去重）
+    const existingServerIds = new Set(
+      messages.value
+        .filter(m => !isLocalId(m.id) && m.id !== 0)
+        .map(m => m.id as number),
+    )
+
+    // 转换并过滤：仅保留 user/assistant 角色，去重
+    const newMessages: ChatMessage[] = sessions
+      .filter(s => !existingServerIds.has(s.id))
+      .map(s => {
+        const role = s.role === 'assistant' ? 'assistant' as const : 'user' as const
+        return {
+          id: s.id,
+          role,
+          content: s.content,
+          status: 'sent' as const,
+          created_at: s.created_at,
+        }
+      })
+
+    if (newMessages.length > 0) {
+      // 移除纯本地欢迎消息，用真实历史替换
+      messages.value = messages.value.filter(m => m.id !== 0)
+      // 合并并按服务端 ID 排序（本地消息排在最后）
+      messages.value = [...messages.value, ...newMessages].sort((a, b) => {
+        const aNum = typeof a.id === 'number' ? a.id : Number.MAX_SAFE_INTEGER
+        const bNum = typeof b.id === 'number' ? b.id : Number.MAX_SAFE_INTEGER
+        return aNum - bNum
+      })
+    }
+
+    ensureWelcomeMessage()
+    historyLoaded.value = true
+  } catch (err) {
+    if (!pageActive) return
+    const msg = err instanceof Error ? err.message : '加载历史记录失败'
+    historyError.value = msg
+    ensureWelcomeMessage()
+  } finally {
+    if (pageActive) {
+      historyLoading.value = false
+      scrollToBottom()
+    }
+  }
+}
+
+// ========== 滚动到底部 ==========
 function scrollToBottom() {
+  // 先清空再设置，确保重复滚动仍然触发
+  scrollIntoViewId.value = ''
   nextTick(() => {
-    // uni-app scroll-view 通过 :scroll-into-view 自动滚动
+    scrollIntoViewId.value = SCROLL_ANCHOR
   })
 }
 
-async function sendMessage() {
-  const text = inputText.value.trim()
-  if (!text || isSending.value) return
-
-  // 本地添加用户消息
-  const userMsg: ChatMessage = { id: Date.now(), role: 'user', content: text }
-  messages.value.push(userMsg)
-  inputText.value = ''
-  scrollToBottom()
+// ========== 发送消息（内部，不含登录检查） ==========
+async function doSend(text: string, existingLocalId?: string) {
+  if (!text.trim() || isSending.value) return
 
   isSending.value = true
 
+  let localMsg: ChatMessage
+
+  if (existingLocalId) {
+    // 重试已有失败消息
+    const idx = messages.value.findIndex(m => m.id === existingLocalId)
+    if (idx === -1) {
+      isSending.value = false
+      return
+    }
+    messages.value[idx] = { ...messages.value[idx], status: 'sending' }
+    localMsg = messages.value[idx]
+  } else {
+    // 新建本地用户消息
+    localMsg = {
+      id: nextLocalId(),
+      role: 'user',
+      content: text,
+      status: 'sending',
+      isLocal: true,
+    }
+    messages.value.push(localMsg)
+  }
+
+  inputText.value = ''
+  scrollToBottom()
+
   try {
-    const response = await sendChatMessage({
-      message: text,
-      session_id: currentSessionId.value,
-    })
+    // 不传递 session_id — 后端自动构建上下文
+    const response = await sendChatMessage({ message: text })
 
-    // 保存 session_id 用于后续对话
-    currentSessionId.value = response.session_id
+    if (!pageActive) return
 
-    // 添加 AI 回复
+    // 用服务端用户消息替换本地临时消息
+    const serverUserMsg: ChatMessage = {
+      id: response.user_message.id,
+      role: 'user',
+      content: response.user_message.content,
+      status: 'sent',
+      created_at: response.user_message.created_at,
+    }
+
+    const idx = messages.value.findIndex(m => m.id === localMsg.id)
+    if (idx !== -1) {
+      messages.value.splice(idx, 1, serverUserMsg)
+    }
+
+    // 追加 AI 回复
     messages.value.push({
-      id: Date.now(),
+      id: response.ai_message.id,
       role: 'assistant',
       content: response.ai_message.content,
+      status: 'sent',
+      created_at: response.ai_message.created_at,
     })
+
     scrollToBottom()
-  } catch (err: unknown) {
+  } catch (err) {
+    if (!pageActive) return
+
+    // 标记本地消息为失败，保留内容供重试
+    const idx = messages.value.findIndex(m => m.id === localMsg.id)
+    if (idx !== -1) {
+      messages.value[idx] = { ...messages.value[idx], status: 'failed' }
+    }
+
     const msg = err instanceof Error ? err.message : 'AI 服务暂时不可用，请稍后再试'
     uni.showToast({ title: msg, icon: 'none', duration: 3000 })
   } finally {
-    isSending.value = false
+    if (pageActive) {
+      isSending.value = false
+    }
   }
 }
+
+// ========== 发送消息（含登录检查） ==========
+function sendMessage() {
+  const text = inputText.value.trim()
+  if (!text || isSending.value) return
+
+  if (!userStore.isLoggedIn) {
+    uni.showToast({ title: '请先登录', icon: 'none' })
+    uni.navigateTo({ url: '/pages/auth/login' })
+    return
+  }
+
+  doSend(text)
+}
+
+// ========== 重试失败消息 ==========
+function retryMessage(msg: ChatMessage) {
+  if (isSending.value || msg.status !== 'failed') return
+  doSend(msg.content, String(msg.id))
+}
+
+// ========== 跳转登录 ==========
+function goLogin() {
+  uni.navigateTo({ url: '/pages/auth/login' })
+}
+
+// ========== 页面生命周期 ==========
+onShow(() => {
+  pageActive = true
+
+  // 从隐藏状态恢复时，如果 isSending 卡住了，重置它
+  // （请求层已处理了 response，这里做安全兜底）
+  if (isSending.value) {
+    const hasLocalSending = messages.value.some(
+      m => m.isLocal && m.status === 'sending',
+    )
+    if (!hasLocalSending) {
+      isSending.value = false
+    }
+  }
+
+  if (userStore.isLoggedIn) {
+    loadHistory()
+  } else {
+    ensureWelcomeMessage()
+  }
+})
+
+onHide(() => {
+  pageActive = false
+})
+
+onUnload(() => {
+  pageActive = false
+})
 </script>
 
 <template>
@@ -68,12 +266,23 @@ async function sendMessage() {
 
     <!-- 消息列表 -->
     <scroll-view
-      ref="scrollViewRef"
       class="chat-list"
       scroll-y
       enhanced
-      :scroll-into-view="'msg-' + (messages.length - 1)"
+      :show-scrollbar="false"
+      :scroll-into-view="scrollIntoViewId"
     >
+      <!-- 历史加载中 -->
+      <view v-if="historyLoading" class="chat-status">
+        <text>加载历史消息...</text>
+      </view>
+
+      <!-- 历史加载失败 -->
+      <view v-if="historyError && !historyLoading" class="chat-status chat-status-error">
+        <text>{{ historyError }}</text>
+      </view>
+
+      <!-- 消息列表 -->
       <view
         v-for="(msg, index) in messages"
         :key="msg.id"
@@ -84,37 +293,60 @@ async function sendMessage() {
         <view class="chat-bubble" :class="msg.role">
           <text>{{ msg.content }}</text>
         </view>
+
+        <!-- 发送中指示 -->
+        <view v-if="msg.status === 'sending'" class="chat-status-text">
+          <text>发送中...</text>
+        </view>
+
+        <!-- 失败状态 + 重试入口 -->
+        <view v-if="msg.status === 'failed'" class="chat-failed-row">
+          <text class="chat-failed-text">发送失败</text>
+          <text class="chat-retry-btn" @tap="retryMessage(msg)">重试</text>
+        </view>
       </view>
 
-      <!-- 加载状态 -->
-      <view v-if="isSending" class="chat-loading">
+      <!-- AI 回复中 -->
+      <view v-if="isSending" class="chat-status">
         <text>AI 回复中...</text>
       </view>
 
       <!-- 空状态提示 -->
-      <view v-if="messages.length <= 1 && !isSending" class="chat-hint">
+      <view v-if="messages.length <= 1 && !isSending && !historyLoading" class="chat-hint">
         <text>试着问我旅行相关的问题吧～</text>
       </view>
+
+      <!-- 滚动锚点 -->
+      <view id="chat-bottom-anchor" />
     </scroll-view>
 
     <!-- 输入区域 -->
     <view class="chat-input-bar safe-area-bottom">
-      <input
-        v-model="inputText"
-        class="chat-input"
-        placeholder="输入你的问题..."
-        placeholder-style="color: #ccc;"
-        confirm-type="send"
-        :disabled="isSending"
-        @confirm="sendMessage"
-      />
-      <button
-        class="chat-send-btn"
-        @tap="sendMessage"
-        :disabled="!inputText.trim() || isSending"
-      >
-        {{ isSending ? '发送中' : '发送' }}
-      </button>
+      <template v-if="userStore.isLoggedIn">
+        <input
+          v-model="inputText"
+          class="chat-input"
+          placeholder="输入你的问题..."
+          placeholder-style="color: #ccc;"
+          confirm-type="send"
+          :disabled="isSending"
+          @confirm="sendMessage"
+        />
+        <button
+          class="chat-send-btn"
+          @tap="sendMessage"
+          :disabled="!inputText.trim() || isSending"
+        >
+          {{ isSending ? '发送中' : '发送' }}
+        </button>
+      </template>
+
+      <template v-else>
+        <view class="chat-login-bar">
+          <text class="chat-login-hint">登录后使用 AI 助手</text>
+          <button class="chat-login-btn" @tap="goLogin">去登录</button>
+        </view>
+      </template>
     </view>
   </view>
 </template>
@@ -135,10 +367,11 @@ async function sendMessage() {
 .chat-message {
   margin-bottom: 24rpx;
   display: flex;
+  flex-direction: column;
 }
 
 .chat-message-self {
-  justify-content: flex-end;
+  align-items: flex-end;
 }
 
 .chat-bubble {
@@ -161,16 +394,51 @@ async function sendMessage() {
   border-bottom-left-radius: 4rpx;
 }
 
-.chat-loading {
+// ========== 状态指示 ==========
+.chat-status {
   text-align: center;
   padding: 24rpx;
 }
 
-.chat-loading text {
+.chat-status text {
   font-size: 24rpx;
   color: #aaa;
 }
 
+.chat-status-error text {
+  color: #FF4D4F;
+}
+
+.chat-status-text {
+  margin-top: 8rpx;
+  text-align: right;
+}
+
+.chat-status-text text {
+  font-size: 22rpx;
+  color: #aaa;
+}
+
+// ========== 失败重试 ==========
+.chat-failed-row {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  margin-top: 8rpx;
+}
+
+.chat-failed-text {
+  font-size: 22rpx;
+  color: #FF4D4F;
+}
+
+.chat-retry-btn {
+  font-size: 22rpx;
+  color: #4A90D9;
+  padding: 4rpx 12rpx;
+}
+
+// ========== 空状态 ==========
 .chat-hint {
   text-align: center;
   padding-top: 200rpx;
@@ -178,6 +446,7 @@ async function sendMessage() {
   color: #bbb;
 }
 
+// ========== 输入区域 ==========
 .chat-input-bar {
   display: flex;
   align-items: center;
@@ -210,5 +479,27 @@ async function sendMessage() {
 
 .chat-send-btn[disabled] {
   background: #ccc;
+}
+
+// ========== 未登录状态 ==========
+.chat-login-bar {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24rpx;
+}
+
+.chat-login-hint {
+  font-size: 28rpx;
+  color: #999;
+}
+
+.chat-login-btn {
+  background: #4A90D9;
+  color: #fff;
+  font-size: 26rpx;
+  padding: 12rpx 32rpx;
+  border-radius: 32rpx;
 }
 </style>

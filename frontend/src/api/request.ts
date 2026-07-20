@@ -6,11 +6,23 @@
  */
 import { getToken, clearAuthStorage } from '@/utils/storage'
 
-/** 后端 API 基础地址 */
-const BASE_URL = 'https://xingzhi-smart-travel-platform.onrender.com'
+/**
+ * 后端 API 基础地址 — 从环境变量读取，不硬编码
+ *
+ * 开发环境：VITE_API_BASE_URL=http://localhost:8000
+ * 生产环境：在部署平台配置环境变量
+ */
+const BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '')
+  .trim()
+  .replace(/\/+$/, '')
 
-/** 请求超时时间 (ms) */
-const TIMEOUT = 15000
+/**
+ * 请求超时时间 (ms)
+ *
+ * Render 冷启动可能需要 5-30s，DeepSeek API 调用约 3-10s，
+ * 因此设置较长的超时以避免 request:fail。
+ */
+const TIMEOUT = 60000
 
 /** 防止 401 时多次 reLaunch */
 let _authRedirecting = false
@@ -38,6 +50,13 @@ export async function request<T = unknown>(
   url: string,
   options: Partial<UniApp.RequestOptions> = {},
 ): Promise<T> {
+  // 环境变量缺失时尽早失败，给出明确错误信息
+  if (!BASE_URL) {
+    return Promise.reject(
+      new Error('VITE_API_BASE_URL 未配置，请检查 frontend/.env.development'),
+    )
+  }
+
   const token = getToken()
 
   const header: Record<string, string> = {
@@ -109,8 +128,27 @@ export async function request<T = unknown>(
         resolve(body as unknown as T)
       },
       fail(err) {
-        console.error('[request] network error:', JSON.stringify(err))
-        reject(new Error(err.errMsg || '网络异常，请检查网络连接'))
+        // 开发环境：输出诊断信息（不含敏感数据）
+        if (import.meta.env.DEV) {
+          console.error('[request] network failure', {
+            url: `${BASE_URL}${url}`,
+            method: options.method || 'GET',
+            errMsg: err.errMsg,
+          })
+        }
+
+        // 转换为用户可理解的错误信息
+        const rawMsg = err.errMsg || ''
+        let message: string
+        if (rawMsg.includes('timeout') || rawMsg.includes('超时')) {
+          message = '请求超时，请稍后重试'
+        } else if (rawMsg.includes('fail') || rawMsg.includes('network') || rawMsg.includes('abort')) {
+          message = '网络请求失败，请检查网络或服务状态'
+        } else {
+          message = rawMsg || '网络异常，请检查网络连接'
+        }
+
+        reject(new Error(message))
       },
     })
   })
