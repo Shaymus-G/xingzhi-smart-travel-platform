@@ -1,10 +1,10 @@
 <script setup lang="ts">
 /**
- * AI 对话页面（骨架）
- * 后续接入 sendChatMessage({ message }) 接口
+ * AI 对话页面 — 接入后端 DeepSeek 真实接口
  */
 import { ref, nextTick } from 'vue'
 import NavBar from '@/components/NavBar.vue'
+import { sendChatMessage } from '@/api/ai'
 
 interface ChatMessage {
   id: number
@@ -16,32 +16,49 @@ const messages = ref<ChatMessage[]>([
   { id: 0, role: 'assistant', content: '你好！我是行知 AI 旅行助手，有什么可以帮助你的吗？' },
 ])
 const inputText = ref('')
-const scrollViewRef = ref<any>(null)
+const isSending = ref(false)
+const currentSessionId = ref<number | undefined>(undefined)
 
 function scrollToBottom() {
   nextTick(() => {
-    // uni-app scroll-view 自动滚动
+    // uni-app scroll-view 通过 :scroll-into-view 自动滚动
   })
 }
 
-function sendMessage() {
+async function sendMessage() {
   const text = inputText.value.trim()
-  if (!text) return
+  if (!text || isSending.value) return
 
-  // 添加用户消息
-  messages.value.push({ id: Date.now(), role: 'user', content: text })
+  // 本地添加用户消息
+  const userMsg: ChatMessage = { id: Date.now(), role: 'user', content: text }
+  messages.value.push(userMsg)
   inputText.value = ''
   scrollToBottom()
 
-  // 骨架：模拟 AI 回复
-  setTimeout(() => {
+  isSending.value = true
+
+  try {
+    const response = await sendChatMessage({
+      message: text,
+      session_id: currentSessionId.value,
+    })
+
+    // 保存 session_id 用于后续对话
+    currentSessionId.value = response.session_id
+
+    // 添加 AI 回复
     messages.value.push({
       id: Date.now(),
       role: 'assistant',
-      content: `[骨架回复] 收到你的消息："${text}"。AI 对话功能将在后续接入 DeepSeek 后端接口后启用。`,
+      content: response.ai_message.content,
     })
     scrollToBottom()
-  }, 800)
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'AI 服务暂时不可用，请稍后再试'
+    uni.showToast({ title: msg, icon: 'none', duration: 3000 })
+  } finally {
+    isSending.value = false
+  }
 }
 </script>
 
@@ -69,8 +86,13 @@ function sendMessage() {
         </view>
       </view>
 
+      <!-- 加载状态 -->
+      <view v-if="isSending" class="chat-loading">
+        <text>AI 回复中...</text>
+      </view>
+
       <!-- 空状态提示 -->
-      <view v-if="messages.length <= 1" class="chat-hint">
+      <view v-if="messages.length <= 1 && !isSending" class="chat-hint">
         <text>试着问我旅行相关的问题吧～</text>
       </view>
     </scroll-view>
@@ -83,10 +105,15 @@ function sendMessage() {
         placeholder="输入你的问题..."
         placeholder-style="color: #ccc;"
         confirm-type="send"
+        :disabled="isSending"
         @confirm="sendMessage"
       />
-      <button class="chat-send-btn" @tap="sendMessage" :disabled="!inputText.trim()">
-        发送
+      <button
+        class="chat-send-btn"
+        @tap="sendMessage"
+        :disabled="!inputText.trim() || isSending"
+      >
+        {{ isSending ? '发送中' : '发送' }}
       </button>
     </view>
   </view>
@@ -132,6 +159,16 @@ function sendMessage() {
   background: #fff;
   color: #333;
   border-bottom-left-radius: 4rpx;
+}
+
+.chat-loading {
+  text-align: center;
+  padding: 24rpx;
+}
+
+.chat-loading text {
+  font-size: 24rpx;
+  color: #aaa;
 }
 
 .chat-hint {
