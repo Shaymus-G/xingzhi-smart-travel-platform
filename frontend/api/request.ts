@@ -7,7 +7,7 @@
 import { getToken, clearAuthStorage } from '@/utils/storage'
 
 /** 后端 API 基础地址 */
-const BASE_URL = 'http://10.136.3.202:8000'
+const BASE_URL = 'https://xingzhi-smart-travel-platform.onrender.com'
 
 /** 请求超时时间 (ms) */
 const TIMEOUT = 15000

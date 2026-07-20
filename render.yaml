@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: xingzhi-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: APP_NAME
+        value: XingZhi Backend
+      - key: DEBUG
+        value: "false"
+      - key: MYSQL_HOST
+        value: gateway01.ap-northeast-1.prod.aws.tidbcloud.com
+      - key: MYSQL_PORT
+        value: "4000"
+      - key: MYSQL_USER
+        value: 2Erny1PcLAcZciH.root
+      - key: MYSQL_DATABASE
+        value: xingzhi
+      - key: SECRET_KEY
+        value: change_this_to_a_random_string_here
+      # 以下两个请在 Render 网页端手动填写（不要放真实值到 Git 仓库）
+      - key: MYSQL_PASSWORD
+        sync: false
+      - key: OPENWEATHER_KEY
+        sync: false
