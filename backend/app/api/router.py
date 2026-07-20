@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api import health, user, travel, recommendation, ai, weather
+from app.api import health, user, travel, recommendation, ai, weather, recommend
 
 router = APIRouter()
 
@@ -19,5 +19,8 @@ router.include_router(recommendation.router, prefix="/api")
 # AI 聊天
 router.include_router(ai.router, prefix="/api")
 
-# 天气（和风天气）
+# 天气（OpenWeatherMap）
 router.include_router(weather.router, prefix="/api")
+
+# 个性化推荐
+router.include_router(recommend.router, prefix="/api")
