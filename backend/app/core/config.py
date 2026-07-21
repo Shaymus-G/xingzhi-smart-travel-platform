@@ -27,6 +27,9 @@ class Settings(BaseSettings):
 
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 小时
 
+    # CORS — 逗号分隔的允许来源，为空时开发模式全开
+    CORS_ORIGINS: str = ""
+
     OPENWEATHER_KEY: str = ""
 
     # DeepSeek AI 配置
