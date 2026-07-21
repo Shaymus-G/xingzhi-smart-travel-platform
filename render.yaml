@@ -19,8 +19,10 @@ services:
       - key: MYSQL_DATABASE
         value: xingzhi
       - key: SECRET_KEY
-        value: change_this_to_a_random_string_here
-      # 以下两个请在 Render 网页端手动填写（不要放真实值到 Git 仓库）
+        value: xz2026-backend-secure-k3y
+      - key: CORS_ORIGINS
+        value: "https://xingzhi-smart-travel-platform.onrender.com"
+      # 以下请在 Render 网页端手动填写（不要放真实值到 Git 仓库）
       - key: MYSQL_PASSWORD
         sync: false
       - key: OPENWEATHER_KEY
