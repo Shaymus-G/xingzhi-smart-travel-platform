@@ -57,6 +57,20 @@
       }
     },
     {
+      "path": "pages/profile/edit",
+      "style": {
+        "navigationBarTitleText": "编辑资料",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/profile/settings",
+      "style": {
+        "navigationBarTitleText": "高级设置",
+        "navigationStyle": "custom"
+      }
+    },
+    {
       "path": "pages/plan/list",
       "style": {
         "navigationBarTitleText": "旅行计划",

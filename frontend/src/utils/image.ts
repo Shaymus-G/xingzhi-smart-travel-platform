@@ -18,8 +18,12 @@
 /** 默认兜底图片 */
 export const DEFAULT_IMAGE = '/static/logo.png'
 
-/** API Base URL（与环境变量保持一致，仅用于相对路径拼接） */
-const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').trim().replace(/\/+$/, '')
+import { getApiBaseUrl } from '@/config/runtime'
+
+/** API Base URL（从运行时配置读取，支持用户手动覆盖） */
+function getApiBase(): string {
+  return getApiBaseUrl()
+}
 
 /**
  * 解析后端返回的图片字段为可安全显示的 URL
@@ -72,8 +76,9 @@ export function resolveImageUrl(value?: string | null, fallback?: string): strin
       return trimmed
     }
     // 其他 / 开头相对路径：尝试拼接 API Base URL
-    if (API_BASE) {
-      return API_BASE + trimmed
+    const apiBase = getApiBase()
+    if (apiBase) {
+      return apiBase + trimmed
     }
     return trimmed
   }

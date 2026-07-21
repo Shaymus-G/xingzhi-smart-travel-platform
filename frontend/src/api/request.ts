@@ -5,16 +5,15 @@
  * 当 code === 0 时，resolve(data)；否则 reject 错误信息。
  */
 import { getToken, clearAuthStorage } from '@/utils/storage'
+import { getApiBaseUrl } from '@/config/runtime'
 
 /**
- * 后端 API 基础地址 — 从环境变量读取，不硬编码
+ * 后端 API 基础地址 — 运行时动态读取
  *
- * 开发环境：VITE_API_BASE_URL=http://localhost:8000
- * 生产环境：在部署平台配置环境变量
+ * 默认来自 VITE_API_BASE_URL 环境变量。
+ * 用户在"高级设置"中手动覆盖后，使用本地存储中的地址。
+ * 地址变更后自动清除登录态，避免 Token 泄露。
  */
-const BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '')
-  .trim()
-  .replace(/\/+$/, '')
 
 /**
  * 请求超时时间 (ms)
@@ -50,10 +49,12 @@ export async function request<T = unknown>(
   url: string,
   options: Partial<UniApp.RequestOptions> = {},
 ): Promise<T> {
-  // 环境变量缺失时尽早失败，给出明确错误信息
-  if (!BASE_URL) {
+  // 每次请求动态读取运行时 Base URL
+  const baseUrl = getApiBaseUrl()
+
+  if (!baseUrl) {
     return Promise.reject(
-      new Error('VITE_API_BASE_URL 未配置，请检查 frontend/.env.development'),
+      new Error('API 地址未配置，请在设置中配置后端地址'),
     )
   }
 
@@ -71,7 +72,7 @@ export async function request<T = unknown>(
 
   return new Promise((resolve, reject) => {
     uni.request({
-      url: `${BASE_URL}${url}`,
+      url: `${baseUrl}${url}`,
       method: options.method || 'GET',
       data: options.data,
       header,
@@ -131,7 +132,7 @@ export async function request<T = unknown>(
         // 开发环境：输出诊断信息（不含敏感数据）
         if (import.meta.env.DEV) {
           console.error('[request] network failure', {
-            url: `${BASE_URL}${url}`,
+            url: `${baseUrl}${url}`,
             method: options.method || 'GET',
             errMsg: err.errMsg,
           })

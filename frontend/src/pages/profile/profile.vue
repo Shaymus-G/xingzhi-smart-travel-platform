@@ -41,10 +41,10 @@ interface MenuItem {
 }
 
 const menuItems: MenuItem[] = [
+  { icon: '✏️', title: '编辑资料', path: '/pages/profile/edit' },
   { icon: '📋', title: '我的旅行计划', path: '/pages/plan/list' },
   { icon: '❤️', title: '我的收藏', path: '/pages/profile/favorites' },
-  { icon: '⭐', title: '我的评论', path: '' },
-  { icon: '⚙️', title: '偏好设置', path: '' },
+  { icon: '⚙️', title: '高级设置', path: '/pages/profile/settings' },
 ]
 
 function handleMenuTap(item: MenuItem) {
