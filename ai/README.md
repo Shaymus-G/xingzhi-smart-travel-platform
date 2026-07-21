@@ -45,7 +45,7 @@ pip install -e ./ai
 |--------|------|--------|
 | `DEEPSEEK_API_KEY` | DeepSeek API 密钥（必填） | — |
 | `DEEPSEEK_BASE_URL` | DeepSeek API 地址 | `https://api.deepseek.com` |
-| `DEEPSEEK_MODEL` | 模型名称 | `deepseek-chat` |
+| `DEEPSEEK_MODEL` | 模型名称 | `deepseek-v4-flash` |
 | `DEEPSEEK_TIMEOUT_SECONDS` | 请求超时（秒） | `30` |
 
 ## 启动方式

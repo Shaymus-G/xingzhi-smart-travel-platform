@@ -24,7 +24,7 @@ class TestClientInit:
 
     def test_valid_key_creates_instance(self):
         client = DeepSeekChatClient(api_key="sk-test-key")
-        assert client.model == "deepseek-chat"
+        assert client.model == "deepseek-v4-flash"
 
     def test_custom_model(self):
         client = DeepSeekChatClient(api_key="sk-test", model="deepseek-reasoner")

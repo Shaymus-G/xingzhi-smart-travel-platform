@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     # DeepSeek AI 配置
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
-    DEEPSEEK_MODEL: str = "deepseek-chat"
+    DEEPSEEK_MODEL: str = "deepseek-v4-flash"
     DEEPSEEK_TIMEOUT_SECONDS: float = 30.0
 
 
