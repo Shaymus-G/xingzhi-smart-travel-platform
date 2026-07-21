@@ -3,6 +3,8 @@
  * 城市卡片组件
  * 只负责展示 + emit 点击事件，不写死跳转路径。
  */
+import SafeImage from '@/components/SafeImage.vue'
+
 interface Props {
   cityId: number
   name: string
@@ -23,13 +25,6 @@ const emit = defineEmits<{
   (e: 'click', cityId: number): void
 }>()
 
-/** 图片兜底 */
-const FALLBACK_IMAGE = '/static/logo.png'
-
-function getImage(src?: string | null): string {
-  return src || FALLBACK_IMAGE
-}
-
 /** 截断描述 */
 function truncate(text?: string | null, max = 50): string {
   if (!text) return ''
@@ -44,9 +39,9 @@ function handleTap() {
 
 <template>
   <view class="city-card" @tap.stop="handleTap">
-    <image
+    <SafeImage
       class="city-card-image"
-      :src="getImage(coverImage)"
+      :src="coverImage"
       mode="aspectFill"
     />
     <view class="city-card-info">

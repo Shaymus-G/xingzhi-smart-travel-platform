@@ -12,6 +12,7 @@ import { getScenicDetail } from '@/api/travel'
 import { getFavorites, addFavorite, deleteFavorite } from '@/api/social'
 import { getReviews, createReview } from '@/api/social'
 import { useUserStore } from '@/stores/user'
+import SafeImage from '@/components/SafeImage.vue'
 import type { ScenicSpot } from '@/types/travel'
 import type { Review } from '@/types/social'
 
@@ -38,8 +39,6 @@ const reviewContent = ref('')
 const reviewScore = ref(5)
 const reviewSubmitting = ref(false)
 
-// ========== 图片 ==========
-const FALLBACK = '/static/logo.png'
 
 // ========== tags 解析 ==========
 const parsedTags = computed<string[]>(() => {
@@ -214,7 +213,7 @@ onReady(() => {
 
       <template v-if="!loading && scenic">
         <!-- 封面图 -->
-        <image class="scenic-cover" :src="scenic.image_url || FALLBACK" mode="aspectFill" />
+        <SafeImage class="scenic-cover" :src="scenic.image_url" mode="aspectFill" />
 
         <!-- 基本信息 -->
         <view class="scenic-info">
