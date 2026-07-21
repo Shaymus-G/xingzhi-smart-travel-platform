@@ -1,6 +1,11 @@
 """
 "行知" 智慧文旅平台 — FastAPI 应用入口
 """
+import sys, os
+# 将项目根目录加入 Python 路径，确保可以导入 ai/xingzhi_ai 包
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ai"))
+sys.path.insert(0, os.path.dirname(__file__))
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.router import router

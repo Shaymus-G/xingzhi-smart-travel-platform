@@ -9,6 +9,7 @@ import ScenicCard from '@/components/ScenicCard.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import Loading from '@/components/Loading.vue'
 import { getCityDetail, getScenics, getHotels, getRestaurants } from '@/api/travel'
+import SafeImage from '@/components/SafeImage.vue'
 import type { City, ScenicSpot, Hotel, Restaurant } from '@/types/travel'
 
 // ========== 路由参数 ==========
@@ -21,9 +22,6 @@ const hotels = ref<Hotel[]>([])
 const restaurants = ref<Restaurant[]>([])
 const loading = ref(false)
 const currentTab = ref<'scenics' | 'hotels' | 'restaurants'>('scenics')
-
-// ========== 图片兜底 ==========
-const FALLBACK = '/static/logo.png'
 
 // ========== 方法 ==========
 
@@ -94,9 +92,9 @@ onReady(() => {
       <template v-if="!loading && city">
         <!-- 城市头部 -->
         <view class="city-header">
-          <image
+          <SafeImage
             class="city-cover"
-            :src="city.cover_image || FALLBACK"
+            :src="city.cover_image"
             mode="aspectFill"
           />
           <view class="city-header-info">
@@ -152,9 +150,9 @@ onReady(() => {
             class="city-simple-card"
             @tap="onHotelTap(h.id)"
           >
-            <image
+            <SafeImage
               class="city-simple-card-img"
-              :src="h.image_url || FALLBACK"
+              :src="h.image_url"
               mode="aspectFill"
             />
             <view class="city-simple-card-body">
@@ -177,9 +175,9 @@ onReady(() => {
             class="city-simple-card"
             @tap="onRestaurantTap(r.id)"
           >
-            <image
+            <SafeImage
               class="city-simple-card-img"
-              :src="r.image_url || FALLBACK"
+              :src="r.image_url"
               mode="aspectFill"
             />
             <view class="city-simple-card-body">

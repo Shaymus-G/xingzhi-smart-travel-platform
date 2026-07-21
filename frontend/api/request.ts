@@ -5,12 +5,23 @@
  * 当 code === 0 时，resolve(data)；否则 reject 错误信息。
  */
 import { getToken, clearAuthStorage } from '@/utils/storage'
+import { getApiBaseUrl } from '@/config/runtime'
 
-/** 后端 API 基础地址 */
-const BASE_URL = 'https://xingzhi-smart-travel-platform.onrender.com'
+/**
+ * 后端 API 基础地址 — 运行时动态读取
+ *
+ * 默认来自 VITE_API_BASE_URL 环境变量。
+ * 用户在"高级设置"中手动覆盖后，使用本地存储中的地址。
+ * 地址变更后自动清除登录态，避免 Token 泄露。
+ */
 
-/** 请求超时时间 (ms) */
-const TIMEOUT = 15000
+/**
+ * 请求超时时间 (ms)
+ *
+ * Render 冷启动可能需要 5-30s，DeepSeek API 调用约 3-10s，
+ * 因此设置较长的超时以避免 request:fail。
+ */
+const TIMEOUT = 60000
 
 /** 防止 401 时多次 reLaunch */
 let _authRedirecting = false
@@ -38,6 +49,15 @@ export async function request<T = unknown>(
   url: string,
   options: Partial<UniApp.RequestOptions> = {},
 ): Promise<T> {
+  // 每次请求动态读取运行时 Base URL
+  const baseUrl = getApiBaseUrl()
+
+  if (!baseUrl) {
+    return Promise.reject(
+      new Error('API 地址未配置，请在设置中配置后端地址'),
+    )
+  }
+
   const token = getToken()
 
   const header: Record<string, string> = {
@@ -52,7 +72,7 @@ export async function request<T = unknown>(
 
   return new Promise((resolve, reject) => {
     uni.request({
-      url: `${BASE_URL}${url}`,
+      url: `${baseUrl}${url}`,
       method: options.method || 'GET',
       data: options.data,
       header,
@@ -109,8 +129,27 @@ export async function request<T = unknown>(
         resolve(body as unknown as T)
       },
       fail(err) {
-        console.error('[request] network error:', JSON.stringify(err))
-        reject(new Error(err.errMsg || '网络异常，请检查网络连接'))
+        // 开发环境：输出诊断信息（不含敏感数据）
+        if (import.meta.env.DEV) {
+          console.error('[request] network failure', {
+            url: `${baseUrl}${url}`,
+            method: options.method || 'GET',
+            errMsg: err.errMsg,
+          })
+        }
+
+        // 转换为用户可理解的错误信息
+        const rawMsg = err.errMsg || ''
+        let message: string
+        if (rawMsg.includes('timeout') || rawMsg.includes('超时')) {
+          message = '请求超时，请稍后重试'
+        } else if (rawMsg.includes('fail') || rawMsg.includes('network') || rawMsg.includes('abort')) {
+          message = '网络请求失败，请检查网络或服务状态'
+        } else {
+          message = rawMsg || '网络异常，请检查网络连接'
+        }
+
+        reject(new Error(message))
       },
     })
   })

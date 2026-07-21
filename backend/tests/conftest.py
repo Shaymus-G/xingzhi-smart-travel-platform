@@ -19,5 +19,5 @@ def pytest_configure():
     # DeepSeek（留空，AI 测试通过 Mock）
     os.environ.setdefault("DEEPSEEK_API_KEY", "")
     os.environ.setdefault("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-    os.environ.setdefault("DEEPSEEK_MODEL", "deepseek-chat")
+    os.environ.setdefault("DEEPSEEK_MODEL", "deepseek-v4-flash")
     os.environ.setdefault("DEEPSEEK_TIMEOUT_SECONDS", "30")

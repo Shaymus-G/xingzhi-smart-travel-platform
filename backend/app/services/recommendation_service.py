@@ -2,10 +2,13 @@
 from typing import Optional
 
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.models.favorite import Favorite
 from app.models.review import Review
+from app.models.scenic import ScenicSpot
+from app.models.hotel import Hotel
+from app.models.restaurant import Restaurant
 
 
 # ==================== Favorite ====================
@@ -95,7 +98,69 @@ def update_review(db: Session, review: Review, **kwargs) -> Review:
     return review
 
 
-def delete_review(db: Session, review: Review) -> None:
-    """删除评论"""
-    db.delete(review)
-    db.commit()
+def get_my_reviews(
+    db: Session, user_id: int, skip: int = 0, limit: int = 20
+) -> tuple[list[dict], int]:
+    """获取当前用户的所有评论，带目标名称和图片
+
+    Returns:
+        (items, total) — items 为评论列表（含 target_name/target_image），total 为总数
+    """
+    # 总数
+    total = db.scalar(
+        select(func.count()).select_from(Review).where(Review.user_id == user_id)
+    ) or 0
+
+    # 分页查询
+    reviews = db.scalars(
+        select(Review)
+        .where(Review.user_id == user_id)
+        .order_by(Review.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+    ).all()
+
+    items = []
+    for r in reviews:
+        target_name, target_image = _resolve_target(db, r.target_type, r.target_id)
+        items.append({
+            "id": r.id,
+            "user_id": r.user_id,
+            "target_type": r.target_type,
+            "target_id": r.target_id,
+            "target_name": target_name,
+            "target_image": target_image,
+            "content": r.content,
+            "score": float(r.score) if r.score else None,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+        })
+
+    return items, total
+
+
+def _resolve_target(db: Session, target_type: str, target_id: int) -> tuple:
+    """根据 target_type 联查目标名称和图片
+
+    目标被删除时返回 ("目标已删除", None)，不抛出异常。
+    """
+    try:
+        if target_type == "scenic_spot":
+            row = db.execute(
+                select(ScenicSpot.name, ScenicSpot.image_url).where(ScenicSpot.id == target_id)
+            ).first()
+        elif target_type == "hotel":
+            row = db.execute(
+                select(Hotel.name, Hotel.image_url).where(Hotel.id == target_id)
+            ).first()
+        elif target_type == "restaurant":
+            row = db.execute(
+                select(Restaurant.name, Restaurant.image_url).where(Restaurant.id == target_id)
+            ).first()
+        else:
+            return ("未知目标", None)
+        if row:
+            return (row[0], row[1])
+        return ("目标已删除", None)
+    except Exception:
+        return ("目标已删除", None)

@@ -24,11 +24,13 @@
     "*.d.ts",
     "pages/**/*.vue",
     "api/**/*.ts",
+    "components/**/*.vue",
+    "config/**/*.ts",
     "types/**/*.ts",
     "stores/**/*.ts",
-    "components/**/*.vue",
     "utils/**/*.ts",
-    "styles/**/*.scss"
+    "styles/**/*.scss",
+    "env.d.ts"
   ],
   "exclude": ["node_modules", "dist", "unpackage"]
 }

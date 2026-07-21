@@ -57,6 +57,20 @@ def remove_favorite(favorite_id: int, current_user: User = Depends(get_current_u
 
 # ==================== Review ====================
 
+@router.get("/reviews/mine", response_model=dict)
+def list_my_reviews(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """我的评论列表 — 当前用户发表的评论，含目标名称和图片"""
+    items, total = recommendation_service.get_my_reviews(
+        db, current_user.id, skip=skip, limit=limit
+    )
+    return success(data={"items": items, "total": total, "skip": skip, "limit": limit})
+
+
 @router.get("/reviews", response_model=dict)
 def list_reviews(
     target_type: str = Query(..., description="目标类型: scenic_spot/hotel/restaurant"),

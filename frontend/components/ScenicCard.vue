@@ -4,6 +4,7 @@
  * 只负责展示 + emit 点击事件。
  */
 import { computed } from 'vue'
+import SafeImage from '@/components/SafeImage.vue'
 
 interface Props {
   scenicId: number
@@ -29,12 +30,6 @@ const emit = defineEmits<{
   (e: 'click', scenicId: number): void
 }>()
 
-const FALLBACK_IMAGE = '/static/logo.png'
-
-function getImage(src?: string | null): string {
-  return src || FALLBACK_IMAGE
-}
-
 /** 格式化为数字显示，兼容 null/undefined/0 */
 function formatNum(val?: number | string | null, prefix = '', suffix = ''): string {
   if (val === null || val === undefined || val === '') return ''
@@ -58,9 +53,9 @@ function handleTap() {
 
 <template>
   <view class="scenic-card" @tap.stop="handleTap">
-    <image
+    <SafeImage
       class="scenic-card-image"
-      :src="getImage(imageUrl)"
+      :src="imageUrl"
       mode="aspectFill"
     />
     <view class="scenic-card-body">

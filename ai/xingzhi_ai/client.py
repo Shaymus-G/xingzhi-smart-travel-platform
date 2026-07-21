@@ -34,7 +34,7 @@ class DeepSeekChatClient:
         self,
         api_key: str,
         base_url: str = "https://api.deepseek.com",
-        model: str = "deepseek-chat",
+        model: str = "deepseek-v4-flash",
         timeout_seconds: float = 30.0,
     ):
         if not api_key or not api_key.strip():

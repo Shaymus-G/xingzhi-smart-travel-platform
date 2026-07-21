@@ -4,12 +4,12 @@
   "description": "行知 XingZhi - 智慧文旅服务平台 移动端",
   "private": true,
   "scripts": {
-    "dev": "uni",
-    "build": "uni build",
-    "dev:h5": "uni",
-    "build:h5": "uni build",
-    "dev:mp-weixin": "uni -p mp-weixin",
-    "build:mp-weixin": "uni build -p mp-weixin",
+    "dev": "cross-env UNI_INPUT_DIR=. uni",
+    "build": "cross-env UNI_INPUT_DIR=. uni build",
+    "dev:h5": "cross-env UNI_INPUT_DIR=. uni",
+    "build:h5": "cross-env UNI_INPUT_DIR=. uni build",
+    "dev:mp-weixin": "cross-env UNI_INPUT_DIR=. uni -p mp-weixin",
+    "build:mp-weixin": "cross-env UNI_INPUT_DIR=. uni build -p mp-weixin",
     "type-check": "vue-tsc --noEmit"
   },
   "dependencies": {
@@ -25,7 +25,9 @@
   "devDependencies": {
     "@dcloudio/types": "^3.4.8",
     "@dcloudio/vite-plugin-uni": "3.0.0-alpha-4080720251125001",
+    "@types/node": "^26.1.1",
     "@uni-helper/uni-app-types": "^0.5.12",
+    "cross-env": "^10.1.0",
     "sass": "^1.72.0",
     "typescript": "^5.4.2",
     "vite": "^5.1.6",
