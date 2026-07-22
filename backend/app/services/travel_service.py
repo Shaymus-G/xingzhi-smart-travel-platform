@@ -1,8 +1,11 @@
-"""旅游资源 Service：城市 / 景点 / 酒店 / 餐厅 / 旅行计划"""
+"""旅游资源 Service：城市 / 景点 / 酒店 / 餐厅 / 旅行计划
+
+P2 新增：城市名称查询、全部城市候选、Top-N 排序查询（NULL 排在最后）。
+"""
 from typing import Optional
 
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import select, desc, case
 
 from app.models.city import City
 from app.models.scenic import ScenicSpot
@@ -15,6 +18,17 @@ from app.models.travel_plan import TravelPlan
 
 def get_city_by_id(db: Session, city_id: int) -> Optional[City]:
     return db.scalar(select(City).where(City.id == city_id))
+
+
+def get_city_by_name(db: Session, name: str) -> Optional[City]:
+    """按城市名精确查询（P2 新增）"""
+    return db.scalar(select(City).where(City.name == name))
+
+
+def get_all_cities(db: Session) -> list[City]:
+    """获取全部城市列表（P2 新增：用于城市匹配候选）"""
+    stmt = select(City).order_by(City.id)
+    return list(db.scalars(stmt).all())
 
 
 def get_cities(db: Session, skip: int = 0, limit: int = 20,
@@ -63,6 +77,26 @@ def get_scenics_by_city(db: Session, city_id: int, skip: int = 0, limit: int = 2
     return list(db.scalars(stmt).all())
 
 
+def get_top_scenics_by_city(
+    db: Session, city_id: int, limit: int = 8
+) -> list[ScenicSpot]:
+    """按城市 ID 查询 Top-N 景点，评分降序，NULL 排在最后（P2 新增）
+
+    使用 CASE WHEN 确保 MySQL 5.7/8.0 兼容。
+    """
+    stmt = (
+        select(ScenicSpot)
+        .where(ScenicSpot.city_id == city_id)
+        .order_by(
+            # NULL score → 排最后
+            case((ScenicSpot.score.is_(None), 1), else_=0),
+            desc(ScenicSpot.score),
+        )
+        .limit(limit)
+    )
+    return list(db.scalars(stmt).all())
+
+
 def get_scenics(db: Session, skip: int = 0, limit: int = 20,
                 category: Optional[str] = None) -> list[ScenicSpot]:
     """查询景点列表，支持按类别筛选"""
@@ -107,6 +141,22 @@ def get_hotels_by_city(db: Session, city_id: int, skip: int = 0, limit: int = 20
     return list(db.scalars(stmt).all())
 
 
+def get_top_hotels_by_city(
+    db: Session, city_id: int, limit: int = 5
+) -> list[Hotel]:
+    """按城市 ID 查询 Top-N 酒店，评分降序，NULL 排在最后（P2 新增）"""
+    stmt = (
+        select(Hotel)
+        .where(Hotel.city_id == city_id)
+        .order_by(
+            case((Hotel.score.is_(None), 1), else_=0),
+            desc(Hotel.score),
+        )
+        .limit(limit)
+    )
+    return list(db.scalars(stmt).all())
+
+
 def create_hotel(db: Session, **kwargs) -> Hotel:
     hotel = Hotel(**kwargs)
     db.add(hotel)
@@ -138,6 +188,22 @@ def get_restaurant_by_id(db: Session, restaurant_id: int) -> Optional[Restaurant
 def get_restaurants_by_city(db: Session, city_id: int, skip: int = 0, limit: int = 20) -> list[Restaurant]:
     stmt = select(Restaurant).where(Restaurant.city_id == city_id)
     stmt = stmt.offset(skip).limit(limit).order_by(Restaurant.score.desc())
+    return list(db.scalars(stmt).all())
+
+
+def get_top_restaurants_by_city(
+    db: Session, city_id: int, limit: int = 5
+) -> list[Restaurant]:
+    """按城市 ID 查询 Top-N 餐厅，评分降序，NULL 排在最后（P2 新增）"""
+    stmt = (
+        select(Restaurant)
+        .where(Restaurant.city_id == city_id)
+        .order_by(
+            case((Restaurant.score.is_(None), 1), else_=0),
+            desc(Restaurant.score),
+        )
+        .limit(limit)
+    )
     return list(db.scalars(stmt).all())
 
 
@@ -178,7 +244,11 @@ def get_plans_by_user(db: Session, user_id: int, skip: int = 0, limit: int = 20)
 def create_plan(db: Session, user_id: int, **kwargs) -> TravelPlan:
     plan = TravelPlan(user_id=user_id, **kwargs)
     db.add(plan)
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(plan)
     return plan
 

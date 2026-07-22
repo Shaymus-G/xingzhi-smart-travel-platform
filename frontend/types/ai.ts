@@ -51,3 +51,15 @@ export interface ChatMessage {
   /** 服务端创建时间（ISO 字符串） */
   created_at?: string
 }
+// ==================== P3: 旅行计划生成 ====================
+
+/** AI 旅行计划生成请求 */
+export interface PlanGenerateRequest {
+  destination: string
+  days: number
+  budget?: number | null
+  travelers?: number
+  preferences?: string[]
+  start_date?: string | null
+  notes?: string | null
+}
