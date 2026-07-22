@@ -85,6 +85,13 @@
       }
     },
     {
+      "path": "pages/plan/generate",
+      "style": {
+        "navigationBarTitleText": "AI 生成计划",
+        "navigationStyle": "custom"
+      }
+    },
+    {
       "path": "pages/profile/profile",
       "style": {
         "navigationBarTitleText": "个人中心",
