@@ -124,6 +124,24 @@ function scrollToBottom() {
   })
 }
 
+// ========== 跳转旅行计划生成页 ==========
+function goToGeneratePlan() {
+  if (!userStore.isLoggedIn) {
+    uni.showToast({
+      title: '请先登录',
+      icon: 'none',
+    })
+    uni.navigateTo({
+      url: '/pages/auth/login',
+    })
+    return
+  }
+
+  uni.navigateTo({
+    url: '/pages/plan/generate',
+  })
+}
+
 // ========== 发送消息（内部，不含登录检查） ==========
 async function doSend(text: string, existingLocalId?: string) {
   if (!text.trim() || isSending.value) return
