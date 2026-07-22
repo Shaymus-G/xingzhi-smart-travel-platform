@@ -46,3 +46,44 @@ class AIChatResponse(BaseModel):
     session_id: int
     user_message: AISessionResponse
     ai_message: AISessionResponse
+
+
+# ==================== P3: 旅行计划生成 ====================
+
+
+class PlanGenerateRequest(BaseModel):
+    """AI 旅行计划生成请求"""
+
+    destination: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="目的地城市名称（如：杭州）",
+    )
+    days: int = Field(..., ge=1, le=10, description="旅行天数（1-10）")
+    budget: float | None = Field(None, ge=0, description="预算总额（人民币元）")
+    travelers: int = Field(default=1, ge=1, le=20, description="出行人数")
+    preferences: list[str] | None = Field(
+        default=None, max_length=10, description="本次行程偏好（最多 10 条）"
+    )
+    start_date: str | None = Field(default=None, description="出行日期（YYYY-MM-DD）")
+    notes: str | None = Field(default=None, max_length=1000, description="补充要求")
+
+    @field_validator("destination")
+    @classmethod
+    def destination_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("目的地不能为空")
+        return v.strip()
+
+    @field_validator("preferences")
+    @classmethod
+    def preferences_strip(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        stripped = [p.strip() for p in v if p.strip()]
+        if not stripped:
+            return None
+        if len(stripped) > 10:
+            raise ValueError("偏好最多 10 条")
+        return stripped

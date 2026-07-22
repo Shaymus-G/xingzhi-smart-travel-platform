@@ -111,6 +111,17 @@ def get_preferences_by_user(db: Session, user_id: int) -> list[UserPreference]:
     return list(db.scalars(stmt).all())
 
 
+def get_top_preferences(db: Session, user_id: int, limit: int = 10) -> list[UserPreference]:
+    """获取用户 Top-N 偏好，按 weight 降序（P2 新增）"""
+    stmt = (
+        select(UserPreference)
+        .where(UserPreference.user_id == user_id)
+        .order_by(UserPreference.weight.desc())
+        .limit(limit)
+    )
+    return list(db.scalars(stmt).all())
+
+
 def delete_preference(db: Session, preference: UserPreference) -> None:
     """删除用户偏好"""
     db.delete(preference)

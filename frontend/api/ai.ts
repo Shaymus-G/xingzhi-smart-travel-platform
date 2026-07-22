@@ -6,7 +6,9 @@ import type {
   AIChatRequest,
   AIChatResponse,
   AISessionResponse,
+  PlanGenerateRequest,
 } from '@/types/ai'
+import type { TravelPlan } from '@/types/travel'
 
 // ==================== 聊天记录 ====================
 
@@ -25,4 +27,11 @@ export function deleteAISession(sessionId: number) {
 /** 发送 AI 对话消息 */
 export function sendChatMessage(data: AIChatRequest) {
   return http.post<AIChatResponse>('/api/ai/chat', toBody(data))
+}
+
+// ==================== P3: 旅行计划生成 ====================
+
+/** 生成 AI 旅行计划 */
+export function generatePlan(data: PlanGenerateRequest): Promise<TravelPlan> {
+  return http.post<TravelPlan>('/api/ai/plans/generate', toBody(data))
 }

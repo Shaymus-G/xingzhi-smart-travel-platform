@@ -8,8 +8,15 @@ from app.core.database import get_db
 from app.core.config import settings
 from app.api.deps import get_current_user
 from app.models.user import User
-from app.schemas.ai import AISessionCreate, AISessionResponse, AIChatRequest
+from app.schemas.ai import (
+    AISessionCreate,
+    AISessionResponse,
+    AIChatRequest,
+    PlanGenerateRequest,
+)
+from app.schemas.travel import TravelPlanResponse
 from app.services import ai_service
+from app.services.ai_plan_service import generate_travel_plan, PlanGenerationError
 from app.utils.response import success
 from xingzhi_ai.exceptions import (
     AIServiceError,
@@ -132,3 +139,84 @@ async def chat(
         "user_message": AISessionResponse.model_validate(user_msg).model_dump(),
         "ai_message": AISessionResponse.model_validate(ai_msg).model_dump(),
     })
+
+
+# ==================== P3: AI 旅行计划生成 ====================
+
+
+@router.post("/plans/generate", response_model=dict)
+async def generate_plan(
+    data: PlanGenerateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    AI 旅行计划生成接口 — 根据目的地、天数、预算等参数，
+    结合平台真实旅游资源，生成结构化旅行计划。
+
+    处理流程:
+        1. 匹配目的地城市
+        2. 查询候选旅游资源
+        3. 查询用户偏好
+        4. 构建计划专用 Prompt
+        5. 调用 DeepSeek 生成 JSON
+        6. 解析 + Pydantic 验证 + 业务验证
+        7. 确定性渲染 Markdown
+        8. 写入 travel_plans 表
+        9. 返回完整计划
+
+    失败时:
+        - 目的地不存在 → 422
+        - DeepSeek 调用失败 → 503
+        - JSON 解析/验证失败 → 502
+        - 数据库保存失败 → 500
+    """
+    try:
+        plan = await generate_travel_plan(
+            db=db,
+            user_id=current_user.id,
+            destination=data.destination,
+            days=data.days,
+            settings=settings,
+            budget=data.budget,
+            travelers=data.travelers,
+            preferences=data.preferences,
+            start_date=data.start_date,
+            notes=data.notes,
+        )
+    except PlanGenerationError as e:
+        logger.warning(
+            "计划生成失败: user_id=%d destination=%s error=%s",
+            current_user.id, data.destination, e.message[:200],
+        )
+        if "未找到" in e.message:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=e.message,
+            )
+        elif "格式无效" in e.message:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=e.message,
+            )
+        elif "保存失败" in e.message:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=e.message,
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=e.message,
+            )
+    except (AIUpstreamError, AIEmptyResponseError) as exc:
+        logger.warning(
+            "DeepSeek 调用失败: user_id=%d type=%s",
+            current_user.id, type(exc).__name__,
+        )
+        raise _handle_ai_exception(exc)
+
+    return success(
+        data=TravelPlanResponse.model_validate(plan).model_dump(),
+        message="旅行计划生成成功",
+    )
