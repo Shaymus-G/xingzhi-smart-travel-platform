@@ -7,7 +7,7 @@ export default defineConfig({
   plugins: [uni()],
   resolve: {
     alias: {
-      '@': __dirname,
+      '@': resolve(__dirname, 'src'),
     },
   },
   server: {
