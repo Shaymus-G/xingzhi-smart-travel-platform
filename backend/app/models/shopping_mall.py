@@ -45,7 +45,7 @@ class ShoppingMall(BaseModel):
         String(500), nullable=True, comment="图片URL"
     )
 
-    city: Mapped["ShoppingMall"] = relationship(back_populates="shopping_malls")
+    city: Mapped["City"] = relationship(back_populates="shopping_malls")
 
     def __repr__(self) -> str:
         return f"<ShoppingMall(id={self.id}, name={self.name})>"
