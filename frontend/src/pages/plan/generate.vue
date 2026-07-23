@@ -3,13 +3,14 @@
  * AI 旅行计划生成页面
  */
 import { ref } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
 import NavBar from '@/components/NavBar.vue'
 import { generatePlan } from '@/api/ai'
 
 // 偏好标签选项
 const PREF_TAGS = [
   '自然风光', '历史文化', '本地美食', '博物馆',
-  '亲子', '摄影', '休闲', '户外',
+  '亲子', '摄影', '休闲', '户外', '购物', '娱乐',
 ]
 
 const destination = ref('')
@@ -20,6 +21,51 @@ const selectedPrefs = ref<string[]>([])
 const startDate = ref('')
 const notes = ref('')
 const isGenerating = ref(false)
+
+// ========== 预填（从重新生成入口进入） ==========
+
+onLoad((options: any) => {
+  if (options?.from !== 'regenerate') return
+
+  // destination
+  if (options.destination) {
+    destination.value = safeDecodeURIComponent(options.destination)
+  }
+
+  // days
+  const d = parseIntegerInRange(options.days, 1, 10)
+  if (d !== null) days.value = d
+
+  // budget
+  if (options.budget !== undefined && options.budget !== null && String(options.budget) !== '') {
+    const b = Number(options.budget)
+    if (Number.isFinite(b) && b >= 0) budget.value = b
+  }
+
+  // travelers
+  const t = parseIntegerInRange(options.travelers, 1, 20)
+  if (t !== null) travelers.value = t
+})
+
+// ========== 辅助函数 ==========
+
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
+function parseIntegerInRange(value: unknown, min: number, max: number): number | null {
+  if (value === undefined || value === null) return null
+  const n = Number(value)
+  if (!Number.isFinite(n) || !Number.isInteger(n)) return null
+  if (n < min || n > max) return null
+  return n
+}
+
+// ========== 表单操作 ==========
 
 function togglePref(tag: string) {
   const idx = selectedPrefs.value.indexOf(tag)

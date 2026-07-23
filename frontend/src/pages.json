@@ -74,7 +74,9 @@
       "path": "pages/plan/list",
       "style": {
         "navigationBarTitleText": "旅行计划",
-        "navigationStyle": "custom"
+        "navigationStyle": "custom",
+        "enablePullDownRefresh": true,
+        "backgroundColor": "#F5F5F5"
       }
     },
     {
@@ -88,6 +90,13 @@
       "path": "pages/plan/generate",
       "style": {
         "navigationBarTitleText": "AI 生成计划",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/resource/detail",
+      "style": {
+        "navigationBarTitleText": "资源详情",
         "navigationStyle": "custom"
       }
     },

@@ -60,6 +60,10 @@ _MIN_RESTAURANTS = 5
 _MAX_SCENICS = 24
 _MAX_HOTELS = 10
 _MAX_RESTAURANTS = 16
+_MIN_ENTERTAINMENTS = 3
+_MAX_ENTERTAINMENTS = 8
+_MIN_MALLS = 3
+_MAX_MALLS = 8
 _MAX_PREFERENCES = 10
 
 
@@ -172,6 +176,27 @@ async def generate_travel_plan(
     except Exception:
         logger.warning("P3 餐厅查询失败: city_id=%d", city_id, exc_info=True)
 
+    # Entertainment & ShoppingMall (P4)
+    entertainment_limit = min(max(days, _MIN_ENTERTAINMENTS), _MAX_ENTERTAINMENTS)
+    mall_limit = min(max(days, _MIN_MALLS), _MAX_MALLS)
+
+    entertainments: list[dict] = []
+    malls: list[dict] = []
+
+    try:
+        from app.services.ai_service import _orm_entertainment_to_dict
+        ent_orms = travel_service.get_top_entertainments_by_city(db, city_id, limit=entertainment_limit)
+        entertainments = [_orm_entertainment_to_dict(e) for e in ent_orms]
+    except Exception:
+        logger.warning("P3 娱乐查询失败: city_id=%d", city_id, exc_info=True)
+
+    try:
+        from app.services.ai_service import _orm_mall_to_dict
+        mall_orms = travel_service.get_top_malls_by_city(db, city_id, limit=mall_limit)
+        malls = [_orm_mall_to_dict(m) for m in mall_orms]
+    except Exception:
+        logger.warning("P3 商场查询失败: city_id=%d", city_id, exc_info=True)
+
     # ==================== 3. 用户偏好 ====================
     try:
         pref_orms = user_service.get_top_preferences(db, user_id, limit=_MAX_PREFERENCES)
@@ -199,6 +224,18 @@ async def generate_travel_plan(
         if rid:
             restaurant_by_id[int(rid)] = r
 
+    entertainment_by_id: dict[int, dict] = {}
+    for e in entertainments:
+        eid = e.get("id")
+        if eid:
+            entertainment_by_id[int(eid)] = e
+
+    mall_by_id: dict[int, dict] = {}
+    for m in malls:
+        mid = m.get("id")
+        if mid:
+            mall_by_id[int(mid)] = m
+
     # ==================== 5. 构建基础旅游上下文（不用于 Prompt，用于日志） ====================
     # 这里不用 P2 的完整 TravelContext，而是直接构建精简的候选数据
     _candidate_count = f"scenics={len(scenics)} hotels={len(hotels)} restaurants={len(restaurants)}"
@@ -221,6 +258,8 @@ async def generate_travel_plan(
         scenics=scenics,
         hotels=hotels,
         restaurants=restaurants,
+        entertainments=entertainments,
+        malls=malls,
         history_preferences=preferences_data,
     )
 
@@ -266,6 +305,8 @@ async def generate_travel_plan(
         scenic_candidates=scenic_by_id,
         hotel_candidates=hotel_by_id,
         restaurant_candidates=restaurant_by_id,
+        entertainment_candidates=entertainment_by_id,
+        mall_candidates=mall_by_id,
     )
 
     if not validation.is_valid:
@@ -333,6 +374,8 @@ def _build_plan_user_message(
     scenics: list[dict],
     hotels: list[dict],
     restaurants: list[dict],
+    entertainments: list[dict],
+    malls: list[dict],
     history_preferences: list[dict],
 ) -> str:
     """构建发送给 DeepSeek 的用户消息（包含候选资源数据）"""
@@ -376,6 +419,22 @@ def _build_plan_user_message(
         lines.append("")
         for i, r in enumerate(restaurants, 1):
             lines.append(_format_restaurant_line(i, r))
+        lines.append("")
+
+    # 候选娱乐资源
+    if entertainments:
+        lines.append("## 候选娱乐资源")
+        lines.append("")
+        for i, e in enumerate(entertainments, 1):
+            lines.append(_format_entertainment_line(i, e))
+        lines.append("")
+
+    # 候选商场
+    if malls:
+        lines.append("## 候选商场")
+        lines.append("")
+        for i, m in enumerate(malls, 1):
+            lines.append(_format_mall_line(i, m))
         lines.append("")
 
     # 历史偏好
@@ -468,4 +527,40 @@ def _format_restaurant_line(index: int, r: dict) -> str:
         lines.append(f"   Address: {addr}")
     if desc:
         lines.append(f"   Description: {desc}")
+    return "\n".join(lines)
+
+
+def _format_entertainment_line(index: int, e: dict) -> str:
+    """格式化候选娱乐行（包含数据库 ID）"""
+    eid = e.get("id", "?")
+    name = e.get("name", "?")
+    score = e.get("score")
+    score_str = f"{score:.1f}" if score else "N/A"
+    price = e.get("price")
+    price_str = f"Y{price:.0f}" if price else "N/A"
+    category = e.get("category", "")
+    open_time = e.get("open_time", "")
+    lines = [f"{index}. [ID:{eid}] {name}"]
+    if category:
+        lines.append(f"   Category: {category}")
+    lines.append(f"   Score: {score_str} | Price: {price_str}")
+    if open_time:
+        lines.append(f"   Hours: {open_time}")
+    return "\n".join(lines)
+
+
+def _format_mall_line(index: int, m: dict) -> str:
+    """格式化候选商场行（包含数据库 ID）"""
+    mid = m.get("id", "?")
+    name = m.get("name", "?")
+    score = m.get("score")
+    score_str = f"{score:.1f}" if score else "N/A"
+    category = m.get("category", "")
+    open_time = m.get("open_time", "")
+    lines = [f"{index}. [ID:{mid}] {name}"]
+    if category:
+        lines.append(f"   Category: {category}")
+    lines.append(f"   Score: {score_str}")
+    if open_time:
+        lines.append(f"   Hours: {open_time}")
     return "\n".join(lines)

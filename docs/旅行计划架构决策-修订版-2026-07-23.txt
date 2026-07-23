@@ -1,0 +1,1285 @@
+================================================================================
+  行知（XingZhi）旅行计划模块 — 架构决策（修订版）
+  日期：2026-07-23
+  分支：feat/HBuilderX-to-CLI (4c3154d)
+  基于：后端 P4 更新后的真实代码
+================================================================================
+
+1. 最新代码事实
+────────────────────────────────────────────────────────────────────────────────
+确认时间：2026-07-23，基于 commit 4c3154d（已合并 master 全部 P4 更新）
+
+  模块            后端代码    数据量        前端代码    状态
+  ─────────────────────────────────────────────────────────────────────
+  娱乐 (entertainment)  ✅ Model+Schema+Service+API  180条/36城市  ❌ 未接入    后端就绪
+  商场 (shopping_mall)  ✅ Model+Schema+Service+API  180条/36城市  ❌ 未接入    后端就绪
+  交通 (transit)        ✅ API+Service(高德)         实时         ❌ 未接入    后端就绪
+  收藏评论 5类          ✅ _resolve_target已处理      —            ❌ 仅3类    后端就绪
+  AI 娱乐/商场候选       ❌ Schema+候选+验证均未扩展   —            ❌          等待AI组
+
+  不再存在的事实（旧报告中的错误结论）：
+    ✗ "本地后端没有娱乐模块"           → 已合并到 master
+    ✗ "本地后端没有商场模块"           → 已合并到 master
+    ✗ "本地后端没有交通模块"           → 已合并到 master
+    ✗ "部署代码领先于仓库"             → 仓库已是唯一事实来源
+    ✗ "收藏评论不支持 entertainment"   → _resolve_target 已处理 5 类
+
+
+2. 相较旧架构报告的修正
+────────────────────────────────────────────────────────────────────────────────
+  旧 ADR                    旧决策                          修正
+  ─────────────────────────────────────────────────────────────────────────
+  ADR-001 事实来源          部署 > 本地代码                 仓库代码 = 主契约
+  ADR-002 SocialTargetType  3类(当前)+5类(未来)             直接扩展为5类
+  ADR-005 schema_version    保持1.0                         升级为1.1
+  ADR-007 娱乐/商场接入     等待后端同步代码                 直接接入
+  ADR-008 收藏评论          保持3类，等待确认                扩展到5类
+  ADR-009 交通              响应结构未知                    响应结构已确认
+  ADR-014 部署同步          代码未同步                       代码已同步
+
+
+3. 当前系统能力矩阵
+────────────────────────────────────────────────────────────────────────────────
+  能力                      后端              前端              结论
+  ─────────────────────────────────────────────────────────────────────────
+  scenic_spot (游)          ✅ CRUD           ✅ 详情页          完成
+  hotel (住)                ✅ CRUD           ❌ 详情页          后端就绪
+  restaurant (吃)           ✅ CRUD           ❌ 详情页          后端就绪
+  entertainment (娱)        ✅ 列表+详情      ❌ 未接入          后端就绪
+  shopping_mall (购)        ✅ 列表+详情      ❌ 未接入          后端就绪
+  transit (行)              ✅ 4种方式        ❌ 未接入          后端就绪
+  计划生成(含娱/购)          ❌ 仅3类候选      ❌ 仅4类展示      等待AI组
+  计划CRUD                  ✅ 完整CRUD       ⚠️ 缺delete+分页   前端补齐
+  收藏(5类)                 ✅               ❌ 仅3类           前端扩展
+  评论(5类)                 ✅               ❌ 仅3类           前端扩展
+
+
+4. 仍待部署确认事项
+────────────────────────────────────────────────────────────────────────────────
+  #  事项                                  阻塞什么                优先级
+  ─────────────────────────────────────────────────────────────────────────
+  1  娱乐/商场数据是否已导入Render TiDB    生产环境数据可用性      中
+  2  AMAP_KEY 是否已在 Render 配置         Transit 生产可用性      中
+
+  注意：以上两项仅阻塞生产环境验收，不阻塞前端开发。
+  前端开发可以使用本地后端或部署后端进行联调。
+
+
+5. 架构目标
+────────────────────────────────────────────────────────────────────────────────
+1. 建立统一领域类型体系（6 种资源类型，3 个场景类型）
+2. 建立 PlanJSON 运行时适配层
+3. 实现五类资源通用详情导航
+4. 接入娱乐/商场/交通（后端 API 全部就绪）
+5. 计划 CRUD 完整闭环
+6. 收藏评论扩展到五类
+7. 实时交通按需加载，不持久化到 PlanJSON
+8. AI 六要素扩展（AI 组 + 后端协作）
+
+
+6. 非目标
+────────────────────────────────────────────────────────────────────────────────
+- 不实现后端 API（已全部就绪）
+- 不修改 AI Prompt（AI 组责任，Task-7 中仅提供需求规范）
+- 不实现实时路线持久化
+- 不实现离线缓存
+- 不实现地图 SDK 前端集成
+- 不实现推送通知
+- 不实现社交动态
+
+
+7. 资源类型体系
+────────────────────────────────────────────────────────────────────────────────
+
+7.1 类型定义
+
+  // types/resource.ts — 唯一资源类型定义文件
+
+  /** 全量资源类型（AI 计划 + Transit 端点 + 资源详情） */
+  export type TravelResourceType =
+    | 'scenic_spot'
+    | 'restaurant'
+    | 'hotel'
+    | 'entertainment'
+    | 'shopping_mall'
+    | 'general_activity'
+
+  /** 可导航资源（有数据库记录 + 详情页） */
+  export type NavigableResourceType = Exclude<TravelResourceType, 'general_activity'>
+
+  /** 社交目标类型（收藏 + 评论）— 直接扩展为五类 */
+  export type SocialTargetType = Exclude<TravelResourceType, 'general_activity'>
+
+  /** Transit 端点类型（同 NavigableResourceType） */
+  export type TransitEndpointType = NavigableResourceType
+
+7.2 资源元数据表
+
+  消除多页面重复 switch：
+
+  // utils/resource-meta.ts
+
+  export interface ResourceTypeMeta {
+    type: TravelResourceType
+    label: string            // 中文标签
+    apiList: string          // API 路径前缀
+    supportsDetail: boolean  // 是否有详情页
+    supportsSocial: boolean  // 是否支持收藏评论
+    supportsTransit: boolean // 是否作为 Transit 端点
+  }
+
+  export const RESOURCE_TYPE_META: Record<TravelResourceType, ResourceTypeMeta> = {
+    scenic_spot:     { type:'scenic_spot',     label:'景点', apiList:'/api/travel/scenics',        supportsDetail:true, supportsSocial:true,  supportsTransit:true },
+    restaurant:      { type:'restaurant',      label:'餐厅', apiList:'/api/travel/restaurants',     supportsDetail:true, supportsSocial:true,  supportsTransit:true },
+    hotel:           { type:'hotel',           label:'酒店', apiList:'/api/travel/hotels',          supportsDetail:true, supportsSocial:true,  supportsTransit:true },
+    entertainment:   { type:'entertainment',   label:'娱乐', apiList:'/api/travel/entertainments',  supportsDetail:true, supportsSocial:true,  supportsTransit:true },
+    shopping_mall:   { type:'shopping_mall',   label:'商场', apiList:'/api/travel/malls',          supportsDetail:true, supportsSocial:true,  supportsTransit:true },
+    general_activity:{ type:'general_activity',label:'活动', apiList:'',                           supportsDetail:false,supportsSocial:false, supportsTransit:false },
+  }
+
+7.3 决策理由
+
+  1. 不再需要 SupportedSocialTargetType / PlannedSocialTargetType 阶段性类型。
+     原因：后端 _resolve_target 已处理 5 类，交接文档明确声明支持。
+     直接使用 SocialTargetType = 5 类。
+
+  2. general_activity 仅用于 AI 计划中的非结构化活动项。
+     无数据库记录、无详情页、无社交功能、不可导航。
+
+  3. RESOURCE_TYPE_META 表消除分散在各页面的 switch/if-else。
+     新增资源类型只需在 meta 表中增加一行。
+
+
+8. PlanJSON 类型体系
+────────────────────────────────────────────────────────────────────────────────
+
+8.1 文件组织
+
+  types/
+  ├── resource.ts    ← TravelResourceType, NavigableResourceType, SocialTargetType, ResourceTypeMeta
+  ├── plan.ts        ← 全量 PlanJSON 类型（唯一来源）
+  ├── travel.ts      ← API 实体类型 (City, Scenic, Hotel, Restaurant, Entertainment, ShoppingMall, TravelPlan)
+  ├── transit.ts     ← Transit 类型 (TransitMethod, TransitRouteRequest, TransitRoute, etc.)
+  ├── ai.ts          ← AI 对话类型 + PlanGenerateRequest
+  ├── social.ts      ← 引用 SocialTargetType
+  ├── user.ts        ← 不变
+  └── common.ts      ← 不变
+
+8.2 types/plan.ts 类型层级
+
+  // 第1层：AI 原始输出（与后端 plan_schema.py 对齐）
+  StructuredTravelPlan {
+    schema_version: string
+    title: string
+    destination: PlanDestination { city_id, name, province }
+    days: number
+    travelers: number
+    summary: string | null
+    budget: PlanBudget { currency, requested_total, estimated_total, breakdown }
+    itinerary: DayPlan[]
+    tips: string[]
+    assumptions: string[]
+  }
+
+  DayPlan { day, theme, summary, weather_note, items, meals, hotel, daily_estimated_cost }
+  PlanTimelineItem { period, start_time, end_time, resource_type, resource_id, name, address, duration_minutes, estimated_cost, reason, transport_to_next }
+  PlanMeal { period, resource_type, resource_id, name, estimated_cost }
+  PlanHotel { resource_type, resource_id, name, address, estimated_cost }
+  PlanBudgetBreakdown { tickets, food, lodging, transport, entertainment?, shopping?, other }
+
+  // 第2层：API 响应包装
+  TravelPlanRecord { id, user_id, title, destination, days, budget, plan_json, markdown, created_at, updated_at }
+  TravelPlanListItem { id, title, destination, days, budget, created_at }
+
+  // 第3层：前端安全模型
+  NormalizedTravelPlan { ...所有字段已填充默认值, _warnings[], _raw }
+
+  // 请求
+  PlanGenerateRequest { destination, days, budget?, travelers?, preferences?, start_date?, notes? }
+
+
+9. PlanJSON 适配层
+────────────────────────────────────────────────────────────────────────────────
+
+9.1 数据流
+
+  API raw response (TravelPlanRecord)
+    → normalizeTravelPlanRecord(record)
+    → normalizeStructuredPlan(record.plan_json)
+    → NormalizedTravelPlan
+    → Vue 页面渲染
+
+9.2 适配函数（utils/plan-normalizer.ts）
+
+  export function normalizeTravelPlanRecord(record: TravelPlanRecord): NormalizedTravelPlan
+  export function normalizeStructuredPlan(raw: unknown): NormalizedTravelPlan | null
+  export function validateResourceType(v: string | undefined): TravelResourceType | 'unknown'
+  export function normalizeCost(v: unknown): number
+  export function normalizePeriod(v: string): string
+
+9.3 适配规则
+
+  输入                        处理                                  输出
+  ─────────────────────────────────────────────────────────────────────
+  plan_json 为 null          返回 null，页面回退 markdown             null
+  plan_json 为字符串          JSON.parse，失败返回 null + warning     object|null
+  destination 为字符串        包装为 {name, city_id:0, province:''}   PlanDestination
+  destination 为对象          保留，缺失字段填充默认值                 PlanDestination
+  budget 为字符串             parseFloat，失败→0                      number
+  budget 为数字               原样保留                                 number
+  resource_type 未知值        标记'unknown'，保留原名，_warnings追加   string
+  resource_id 为 null/0       置为0，保留 name 展示                   number
+  estimated_cost 为负         置为0 + warning                         number
+  period 中文                 转英文（映射表）                         English period
+  itinerary 缺失              默认[]                                  []
+  schema_version 缺失         默认"1.0"                                string
+  schema_version 未知(>1.1)   标记 warning，继续渲染                   string
+  markdown 存在但 plan_json 为 null  使用 markdown 展示               string
+
+9.4 失败策略
+
+  - 不抛异常：部分字段损坏不应阻塞整个页面
+  - _warnings 收集所有非致命问题
+  - 开发环境：console.warn 输出 warnings
+  - 生产环境：静默
+  - _raw 保留原始 plan_json 供调试
+  - 不使用第三方校验库（zod 等），手写校验逻辑
+
+
+10. schema_version 决策
+────────────────────────────────────────────────────────────────────────────────
+
+10.1 方案比较
+
+  方案   版本   变更内容                                       兼容性
+  ─────────────────────────────────────────────────────────────────────
+  A      1.0    增加 entertainment/shopping_mall 枚举          兼容
+  B      1.1    标记为"扩展资源类型版"，内容同A                 兼容+明确
+  C      2.0    同时重构 transport 为对象                      破坏性
+
+10.2 决策：方案 B（升级到 1.1）
+
+  理由：
+    1. 资源类型集合从 4 种扩展到 6 种，虽不破坏旧计划解析，但语义上有实质扩展
+    2. 版本号变更使消费者（前端、renderer、验证器）能明确区分扩展前后的计划
+    3. 历史 1.0 计划继续正常读取（前端适配层兼容未知 resource_type）
+    4. 1.1 的结构与 1.0 完全一致，仅 VALID_RESOURCE_TYPES 扩展
+
+  版本路线图：
+    v1.0 — 当前：scenic_spot, restaurant, hotel, general_activity
+    v1.1 — 本次：增加 entertainment, shopping_mall
+    v2.0 — 未来：transport 对象化、weather 结构化 等真正破坏性变更
+
+10.3 实施
+
+  后端 plan_schema.py:
+    VALID_RESOURCE_TYPES 增加 entertainment, shopping_mall
+    schema_version 默认值改为 "1.1"
+
+  前端适配层:
+    识别 1.0 和 1.1 均为兼容版本
+    未知版本标记 warning 继续渲染
+
+10.4 不列入 v1.1 的变更
+
+  - transport_to_next 仍为 string | null（不加入实时交通对象）
+  - budget.breakdown 不新增 entertainment/shopping 字段（由 AI 自由分配 other）
+  - 不改变 PlanJSON 顶层结构
+
+
+11. 实时交通与持久化边界
+────────────────────────────────────────────────────────────────────────────────
+
+11.1 核心原则
+
+  ┌─────────────────────────────────────────────────────────┐
+  │ 持久化数据（plan_json）          │  页面运行时状态       │
+  ├─────────────────────────────────────────────────────────┤
+  │ transport_to_next: string|null   │  TransitRoute 缓存    │
+  │ AI 生成的交通建议文本            │  Transit API 实时结果 │
+  │ 写入数据库                       │  不写入数据库         │
+  │ 通过 PUT 可更新                  │  页面卸载即丢弃       │
+  │ schema_version 不受影响          │  不影响 schema_version│
+  └─────────────────────────────────────────────────────────┘
+
+11.2 实时交通数据流
+
+  plan/detail.vue:
+    1. 默认展示 transport_to_next 文本
+    2. 用户点击 "查看路线" 按钮
+    3. GET /api/transit/route 请求
+    4. normalizeTransitResponse() 规范化
+    5. 页面级 Map 缓存 (key: fromType:fromId-toType:toId-method)
+    6. 展示 TransitInfo 组件
+    7. 失败时保留 transport_to_next 文本，显示 "路线查询失败"
+    8. 页面 onUnload 清空缓存 + abort 进行中请求
+
+11.3 transit 类型（types/transit.ts）
+
+  export type TransitMethod = 'transit' | 'driving' | 'walking' | 'bicycling'
+
+  export interface TransitRouteRequest {
+    from_type: NavigableResourceType
+    from_id: number
+    to_type: NavigableResourceType
+    to_id: number
+    method: TransitMethod
+    city?: string  // transit 模式必传
+  }
+
+  // 响应类型基于交接文档提供的真实样例
+  export interface TransitRouteCommon {
+    method: TransitMethod
+    distance: string   // "12832 米"
+    duration: string   // "45 分钟"
+  }
+
+  export interface TransitRouteTransit extends TransitRouteCommon {
+    method: 'transit'
+    cost: string       // "4.0 元"
+    walking_distance: string
+    segments: TransitSegment[]
+  }
+
+  export interface TransitRouteDriving extends TransitRouteCommon {
+    method: 'driving'
+    traffic_lights: number
+    toll: string       // "0 元"
+    steps: TransitStep[]
+  }
+
+  export interface TransitRouteWalking extends TransitRouteCommon {
+    method: 'walking'
+    steps: TransitStep[]
+  }
+
+  export interface TransitRouteBicycling extends TransitRouteCommon {
+    method: 'bicycling'
+    steps: TransitStep[]
+  }
+
+  export type TransitRoute =
+    | TransitRouteTransit
+    | TransitRouteDriving
+    | TransitRouteWalking
+    | TransitRouteBicycling
+
+  export interface TransitSegment {
+    type: string        // "walking"|"subway"|"bus"
+    name?: string       // 线路名称
+    departure?: string  // 上车站
+    arrival?: string    // 下车站
+    via_stops?: number  // 经停站数
+    instruction?: string
+    distance: string
+    duration?: string
+  }
+
+  export interface TransitStep {
+    instruction: string
+    distance: string
+  }
+
+11.4 关键决策
+
+  - Transit API 主入口使用 /api/transit/route（通用）
+  - /api/transit/between-spots 仅作为景点间快捷优化（减少前端传参）
+  - general_activity 不允许作为 transit 端点
+  - city 参数来源：优先从 PlanJSON destination.name 获取
+  - 公交模式 city 必传，非公交模式忽略
+  - 前端不持有 AMAP_KEY（密钥在后端 transit_service 中）
+
+
+12. 资源详情架构
+────────────────────────────────────────────────────────────────────────────────
+
+12.1 决策：方案3 — 景点独立 + 其他四类通用详情
+
+  页面路由：
+    /pages/scenic/detail?id=xxx          ← 保留独立页（已有完整收藏评论逻辑）
+    /pages/resource/detail?type=xxx&id=xxx ← 通用详情页（酒店/餐厅/娱乐/商场）
+
+  不在 pages.json 中注册：
+    pages/hotel/detail
+    pages/restaurant/detail
+    pages/entertainment/detail
+    pages/mall/detail
+
+12.2 通用详情页数据获取
+
+  const API_MAP: Record<string, (id:number)=>Promise<unknown>> = {
+    hotel:         getHotelDetail,
+    restaurant:    getRestaurantDetail,
+    entertainment: getEntertainmentDetail,
+    shopping_mall: getMallDetail,
+  }
+
+12.3 通用详情页字段配置
+
+  基于 RESOURCE_TYPE_META + 字段白名单决定展示哪些字段：
+
+  const DISPLAY_FIELDS: Record<string, string[]> = {
+    hotel:         ['name','address','score','price','open_time','description','image_url'],
+    restaurant:    ['name','address','score','price_level','category','description','image_url'],
+    entertainment: ['name','address','score','price','category','open_time','description','image_url'],
+    shopping_mall: ['name','address','score','category','open_time','description','image_url'],
+  }
+
+12.4 通用详情页组件结构
+
+  <ResourceDetail>
+    <SafeImage :src="resource.image_url" />
+    <ResourceMeta :fields="visibleFields" />
+    <ResourceDescription :text="resource.description" />
+    <ResourceSocialSection v-if="meta.supportsSocial"
+      :target-type="type" :target-id="id" />
+  </ResourceDetail>
+
+12.5 导航工具函数
+
+  // utils/navigation.ts
+
+  export function getResourceDetailUrl(type: NavigableResourceType, id: number): string {
+    if (type === 'scenic_spot') return `/pages/scenic/detail?id=${id}`
+    return `/pages/resource/detail?type=${type}&id=${id}`
+  }
+
+  export function openResourceDetail(type: string, id: number | null | undefined): void {
+    if (!id || !isNavigableResourceType(type)) {
+      uni.showToast({ title: '资源详情暂不可用', icon: 'none' })
+      return
+    }
+    uni.navigateTo({ url: getResourceDetailUrl(type, id) })
+  }
+
+
+13. 城市五类资源架构
+────────────────────────────────────────────────────────────────────────────────
+
+13.1 决策
+
+  五类横向滚动 Tab：景点 | 酒店 | 餐厅 | 娱乐 | 商场
+  首次加载：只请求当前激活 Tab（默认景点）
+  切换 Tab：懒加载，首次切换时请求，已加载 Tab 缓存数据
+  每类资源独立分页（skip/limit），滚动到底部追加
+
+13.2 数据结构
+
+  const tabs = ['scenics','hotels','restaurants','entertainments','malls'] as const
+
+  const dataMap: Record<string, Ref<any[]>> = {
+    scenics:        ref<ScenicSpot[]>([]),
+    hotels:         ref<Hotel[]>([]),
+    restaurants:    ref<Restaurant[]>([]),
+    entertainments: ref<Entertainment[]>([]),
+    malls:          ref<ShoppingMall[]>([]),
+  }
+
+  const loadedTabs = reactive(new Set<string>())
+  const pageMap: Record<string, number> = { scenics:0, hotels:0, restaurants:0, entertainments:0, malls:0 }
+
+13.3 空数据展示
+
+  36 重点城市外的娱乐/商场返回 [] → 显示 "暂无娱乐场所数据"
+  不得将空数组显示为网络错误
+  空数组 ≠ 接口异常
+
+13.4 接口错误展示
+
+  仅当 HTTP 错误（4xx/5xx/network error）时显示错误状态 + 重试按钮
+
+
+14. 收藏评论架构
+────────────────────────────────────────────────────────────────────────────────
+
+14.1 决策：SocialTargetType 直接扩展到五类
+
+  export type SocialTargetType =
+    | 'scenic_spot'
+    | 'hotel'
+    | 'restaurant'
+    | 'entertainment'
+    | 'shopping_mall'
+
+  理由：后端 _resolve_target 已实现 5 类处理，交接文档明确声明支持。
+
+14.2 通用资源详情页中的收藏评论
+
+  组件 ResourceSocialSection：
+    Props: targetType: SocialTargetType, targetId: number
+    功能：
+      - 显示收藏状态（通过 getFavorites 列表匹配或 isFavorited 检查）
+      - 添加/取消收藏
+      - 显示评论列表（getReviews）
+      - 发表评论（createReview）
+      - 编辑/删除评论：暂纳入本阶段（API 已封装，仅在UI层面补齐）
+
+14.3 后端非阻塞技术债
+
+  ⚠️ social.py Schema: target_type 仍是 str（无 Pydantic Literal 约束）
+     → 前端发送合法类型即可正常工作，但后端应后续收紧
+  ⚠️ 无显式目标存在性校验
+     → 收藏不存在的 target_id 会成功但回显异常
+  ⚠️ 无数据库唯一约束防止重复收藏（当前用 Python 查询防重）
+
+  以上不阻塞前端开发，但必须记录。
+
+
+15. Transit 架构
+────────────────────────────────────────────────────────────────────────────────
+
+15.1 API 封装
+
+  // api/transit.ts
+
+  export function getTransitRoute(params: TransitRouteRequest): Promise<TransitRoute> {
+    return http.get('/api/transit/route', filterParams(params))
+  }
+
+  export function getTransitBetweenSpots(
+    spotAId: number, spotBId: number, method: TransitMethod
+  ): Promise<TransitRoute> {
+    return http.get('/api/transit/between-spots', { spot_a_id: spotAId, spot_b_id: spotBId, method })
+  }
+
+15.2 页面级缓存
+
+  // utils/transit-cache.ts
+
+  class TransitCache {
+    private cache = new Map<string, { data: TransitRoute; ts: number }>()
+    private TTL = 5 * 60 * 1000  // 5分钟
+
+    key(req: TransitRouteRequest): string {
+      return `${req.from_type}:${req.from_id}-${req.to_type}:${req.to_id}-${req.method}`
+    }
+
+    get(req: TransitRouteRequest): TransitRoute | null { ... }
+    set(req: TransitRouteRequest, data: TransitRoute): void { ... }
+    clear(): void { ... }
+  }
+
+  每个详情页创建一个 TransitCache 实例，onUnload 时清空。
+
+15.3 计划详情中的交通入口
+
+  每条 PlanTimelineItem 下方：
+    - 默认：显示 transport_to_next 文本（"🚗 步行前往下一站"）
+    - 按钮："查看路线"（仅当有下一站且两端均有 resource_id 时显示）
+    - 点击：展开路线选择器（method 选择 + 实时查询）
+    - 结果：在 item 下方展开显示路线详情
+    - 失败：保留 transport_to_next 文本 + "路线查询失败，使用AI建议"
+
+15.4 请求取消
+
+  - 详情页 onUnload 时 abort 进行中的 transit 请求
+  - 用户切换 method 时 abort 上一个未完成请求
+
+
+16. AI 娱乐购物扩展（需求规范，非前端实施）
+────────────────────────────────────────────────────────────────────────────────
+
+16.1 本阶段 AI 扩展目标
+
+  使 AI 计划生成能够：
+    1. 在候选资源中包含 entertainment 和 shopping_mall
+    2. 在 PlanJSON 中输出 entertainment/shopping_mall 类型的 item
+    3. 验证引用的娱乐/商场 resource_id 来自候选数据库
+    4. 在有相关偏好时智能选择，无偏好时不强制包含
+
+16.2 需要修改的文件（AI组 + 后端）
+
+  文件                                        修改内容
+  ─────────────────────────────────────────────────────────────────────
+  ai/xingzhi_ai/plan_schema.py                VALID_RESOURCE_TYPES += entertainment, shopping_mall
+                                               _RESOURCE_TYPE_MAP += 中文映射
+                                               schema_version default → "1.1"
+                                               get_all_resource_ids += entertainment, shopping_mall
+  backend/app/services/ai_plan_service.py      + get_top_entertainments_by_city
+                                               + get_top_malls_by_city
+                                               + entertainment_by_id / mall_by_id
+                                               + Prompt 增加娱乐/商场候选区块
+  ai/xingzhi_ai/plan_validation.py             + entertainment_by_id / mall_by_id 校验
+  ai/xingzhi_ai/plan_renderer.py               + entertainment/shopping_mall 渲染
+  ai/xingzhi_ai/plan_prompts.py                + JSON 示例含 entertainment/shopping_mall
+
+16.3 候选数量建议
+
+  类型              最小      最大（随天数）    排序
+  ───────────────────────────────────────────────────────
+  entertainment     3         8               score DESC
+  shopping_mall     3         8               score DESC
+
+16.4 正确验收标准
+
+  禁止的验收标准：
+    ✗ "每份计划必须包含六种 resource_type"
+    ✗ "每份计划必须包含娱乐和商场"
+
+  正确的验收标准：
+    ✓ 偏好含"娱乐"的计划中出现了 entertainment 类型 item
+    ✓ 偏好含"购物"的计划中出现了 shopping_mall 类型 item
+    ✓ 普通自然风光行程可以不包含娱乐和商场
+    ✓ 所有有 resource_id 的记录均来自候选数据库
+    ✓ 无真实数据时不生成虚假 resource_id
+    ✓ 娱乐/商场 ID 无法在 scenic/hotel/restaurant 表中查到
+
+
+17. 计划 CRUD 与重新生成
+────────────────────────────────────────────────────────────────────────────────
+
+17.1 删除
+
+  前端：
+    api/travel.ts: export function deletePlan(id: number): Promise<void>
+    列表页：长按/左滑删除，二次确认弹窗
+    详情页：底部"删除计划"按钮，二次确认
+    删除后：列表页移除该项 + 如果当前页为空则回退一页
+    使用悲观删除：等待后端成功响应后移除
+
+17.2 更新
+
+  决策：当前阶段不接入 updatePlan。
+  理由：前端编辑 plan_json 会破坏 markdown 一致性。
+        仅开放 title 编辑需求不明确，暂缓。
+
+17.3 重新生成
+
+  MVP：
+    detail.vue → "重新生成"按钮
+    → navigateTo /pages/plan/generate?from=regenerate&dest=杭州&days=3&budget=3000
+    → generate.vue 读取 URL 参数预填表单
+    → 用户可修改参数后提交
+    → 创建新计划（新 ID），旧计划保留
+
+  不通过 PUT 覆盖旧 plan_json。
+
+
+18. 请求和错误策略
+────────────────────────────────────────────────────────────────────────────────
+
+18.1 超时配置
+
+  请求类型              超时 (ms)    理由
+  ───────────────────────────────────────────────────
+  普通 GET              15,000      旅游资源查询
+  普通写请求            15,000      登录/注册/收藏/评论
+  AI 对话               60,000      DeepSeek 生成
+  AI 计划生成           90,000      候选查询+Prompt+DeepSeek+验证+保存
+  Transit               15,000      高德地图 API
+
+18.2 请求取消
+
+  - uni.request 返回 RequestTask，存储到页面变量
+  - onUnload 时 abort：AI 计划生成、Transit 请求
+  - abort 后不显示 toast（用户主动离开）
+  - 列表/详情 GET 不取消（响应快，取消无副作用）
+
+18.3 重试策略
+
+  场景                        策略
+  ───────────────────────────────────────────────────
+  AI 计划生成                  不自动重试（可能已保存，响应丢失会导致重复）
+  Transit                      允许手动重试（点击"重试"按钮）
+  普通 GET                     不自动重试（用户下拉刷新或点击重试按钮）
+  删除操作                     不自动重试（用户确认后手动重试）
+  网络错误                     统一提示"网络异常"，不自动重试
+
+18.4 HTTP 错误映射
+
+  状态码    含义                  前端处理
+  ─────────────────────────────────────────────────────
+  200/201   成功                  正常渲染
+  400       参数错误              显示后端 message
+  401       未登录                清除 Token → 跳转登录
+  404       资源不存在            显示"资源不存在"
+  409       重复收藏              显示"已收藏"
+  422       校验失败              解析 detail 数组
+  500       服务器错误            显示"服务器错误"
+  502       AI 格式无效           显示"AI生成失败，请重试"
+  503       AI 服务不可用          显示"AI服务繁忙"
+
+
+19. 状态管理和缓存
+────────────────────────────────────────────────────────────────────────────────
+
+19.1 决策：不使用 Plan Store
+
+  理由：
+    - 后端已持久化所有计划数据
+    - 列表/详情/生成是独立页面导航
+    - onShow 重新请求数据比 Store 同步更可靠
+    - 删除后通过 onShow 自动刷新
+
+  例外：如果后续需要跨页面"生成中"状态，可以添加轻量 planStore，
+        但目前不必要。
+
+19.2 Transit 缓存
+
+  归属：页面局部（每个详情页独立 TransitCache 实例）
+  生命周期：页面卸载时清空
+  TTL：5 分钟
+  不跨页面共享（不同计划的路线没有复用价值）
+
+
+20. ADR 修订结果
+────────────────────────────────────────────────────────────────────────────────
+
+ADR-001：事实来源与版本一致性（修订）
+────────────────────────────────────────────────────────────────────────────────
+背景：P4 后端代码已合并到 master，仓库代码 = 部署代码。
+决策：仓库当前 commit (4c3154d) 为唯一开发契约。部署环境数据导入属于
+      生产验收事项，不阻塞前端开发。
+对照旧 ADR-001：移除"部署领先于仓库"的描述。
+影响范围：无
+对应任务：全部
+
+ADR-002：资源类型体系（修订）
+────────────────────────────────────────────────────────────────────────────────
+背景：后端已支持 5 类资源查询 + 5 类 social 解析。
+决策：TravelResourceType(6)、NavigableResourceType(5)、SocialTargetType(5)。
+      不再使用 SupportedSocialTargetType/PlannedSocialTargetType 阶段性类型。
+      增加 RESOURCE_TYPE_META 消除分散 switch。
+对照旧 ADR-002：移除阶段性类型设计。
+影响范围：types/resource.ts, types/social.ts, utils/resource-meta.ts
+对应任务：Task-1
+
+ADR-003：PlanJSON 类型体系（保持）
+────────────────────────────────────────────────────────────────────────────────
+背景：detail.vue 内联类型与后端 Schema 分离。
+决策：三层类型体系（AI原始→API响应→前端安全模型），集中在 types/plan.ts。
+对照旧 ADR-003：不变。
+影响范围：types/plan.ts (新建)
+对应任务：Task-1
+
+ADR-004：PlanJSON 运行时适配（保持）
+────────────────────────────────────────────────────────────────────────────────
+背景：as PlanJson 断言无运行时保护。
+决策：normalizeTravelPlanRecord → normalizeStructuredPlan 适配链。
+      失败不抛异常，收集 _warnings[]。
+对照旧 ADR-004：增加 entertainment/shopping_mall resource_type 处理。
+影响范围：utils/plan-normalizer.ts (新建)
+对应任务：Task-1
+
+ADR-005：schema_version（修订）
+────────────────────────────────────────────────────────────────────────────────
+背景：资源类型从 4 种扩展到 6 种。
+决策：升级到 schema_version = "1.1"。v1.0 计划继续兼容。
+      升级路径：1.0(旧4类) → 1.1(+entertainment/shopping_mall) → 2.0(未来破坏性变更)
+对照旧 ADR-005：从"保持1.0"改为"升级1.1"。
+影响范围：plan_schema.py, types/plan.ts, utils/plan-normalizer.ts
+对应任务：Task-1 (前端), Task-7 (AI/后端)
+
+ADR-006：通用资源详情（保持）
+────────────────────────────────────────────────────────────────────────────────
+背景：5 类资源各有详情 API，仅景点有详情页。
+决策：景点独立 + 其他四类通用 /pages/resource/detail?type=&id=。
+对照旧 ADR-006：不变，扩展支持 entertainment/shopping_mall。
+影响范围：pages/resource/detail.vue (新建), pages/scenic/detail.vue (不改)
+对应任务：Task-3, Task-4
+
+ADR-007：娱乐和商场直接接入（修订）
+────────────────────────────────────────────────────────────────────────────────
+背景：旧 ADR-007 标记"等待后端同步代码"。代码现已合并。
+决策：直接接入娱乐/商场 API（前后端代码均在本仓库）。
+      类型设计 → API 封装 → 通用详情页 → 城市 5 Tab → 收藏评论。
+对照旧 ADR-007：移除"等待后端"阻塞条件。
+影响范围：types/travel.ts, api/travel.ts, pages/resource/detail.vue, pages/city/detail.vue
+对应任务：Task-4, Task-5
+
+ADR-008：收藏评论五类支持（修订）
+────────────────────────────────────────────────────────────────────────────────
+背景：旧 ADR-008 保持 3 类。后端 _resolve_target 已处理 5 类，交接文档确认。
+决策：SocialTargetType 直接扩展到五类。
+      entertainment/shopping_mall 的收藏评论按钮在通用详情页中显示。
+对照旧 ADR-008：从"保持3类"改为"扩展到5类"。
+影响范围：types/social.ts, pages/resource/detail.vue
+对应任务：Task-5
+
+ADR-009：实时交通不持久化（修订）
+────────────────────────────────────────────────────────────────────────────────
+背景：旧 ADR-009 基于未知响应结构设计。现响应结构已确认。
+决策：transport_to_next 持久化（AI文本），Transit 实时查询仅页面缓存。
+对照旧 ADR-009：增加确认的响应结构和详细类型。
+影响范围：api/transit.ts, types/transit.ts, utils/transit-cache.ts, pages/plan/detail.vue
+对应任务：Task-6
+
+ADR-010：重新生成语义（保持）
+────────────────────────────────────────────────────────────────────────────────
+背景：无 regenerate API。
+决策：MVP 预填参数跳转生成页 → 创建新计划。不覆盖旧计划。
+对照旧 ADR-010：不变。
+影响范围：pages/plan/detail.vue, pages/plan/generate.vue
+对应任务：Task-2
+
+ADR-011：状态管理（保持）
+────────────────────────────────────────────────────────────────────────────────
+决策：不使用 Plan Store。各页面独立请求。Transit 缓存页面级。
+对照旧 ADR-011：不变。
+对应任务：全部
+
+ADR-012：分页（保持）
+────────────────────────────────────────────────────────────────────────────────
+决策：skip/limit 传统分页。计划列表首次 20 条，滚动追加。
+对照旧 ADR-012：不变。
+对应任务：Task-2
+
+ADR-013：请求取消和重试（保持）
+────────────────────────────────────────────────────────────────────────────────
+决策：AI 生成/Transit 支持 abort。AI 不自动重试。Transit 可手动重试。
+对照旧 ADR-013：增加 transit 超时(15s)和 abort 策略。
+对应任务：Task-2, Task-6
+
+ADR-014：AI 六要素扩展策略（新）
+────────────────────────────────────────────────────────────────────────────────
+背景：AI 当前仅 3 类候选资源。娱乐/商场 API 和数据已就绪但 AI 未接入。
+决策：AI 六要素不是每份计划必须包含六类。AI 根据偏好和城市数据智能选择。
+      不要求机械包含所有类型。验收标准聚焦"有偏好时有对应资源"。
+对照旧 ADR-014：原 ADR-014 关于"部署代码同步"已解决，
+      新 ADR-014 聚焦 AI 扩展策略。
+影响范围：plan_schema.py, ai_plan_service.py, plan_validation.py, plan_prompts.py
+对应任务：Task-7
+
+
+21. 八项任务
+────────────────────────────────────────────────────────────────────────────────
+
+================================================================================
+Task-1：领域类型体系与 PlanJSON 适配层
+────────────────────────────────────────────────────────────────────────────────
+目标：建立统一类型体系、PlanJSON 运行时适配层、消除 as PlanJson 断言。
+
+责任方：前端
+前置条件：无
+输入：后端 plan_schema.py, 现有前端类型, 交接文档
+输出：
+  - types/resource.ts（TravelResourceType, NavigableResourceType, SocialTargetType, ResourceTypeMeta）
+  - types/plan.ts（完整 PlanJSON 类型体系）
+  - types/social.ts（SocialTargetType 扩展到 5 类）
+  - types/transit.ts（TransitMethod, TransitRoute 等）
+  - utils/resource-meta.ts（RESOURCE_TYPE_META 配置表）
+  - utils/plan-normalizer.ts（normalizeTravelPlanRecord 等）
+  - utils/navigation.ts（getResourceDetailUrl, openResourceDetail）
+  - pages/plan/detail.vue 移除内联 PlanJson 接口，使用适配层
+
+涉及文件：
+  新建：types/resource.ts, types/plan.ts, types/transit.ts,
+        utils/resource-meta.ts, utils/plan-normalizer.ts, utils/navigation.ts
+  修改：types/social.ts, types/travel.ts（增加 ShoppingMall, Entertainment 类型）,
+        types/ai.ts（无结构性变化）,
+        pages/plan/detail.vue（替换内联类型为适配层）
+
+禁止修改：API 封装, 页面 UI, manifest.json, pages.json, 后端文件
+
+验收标准：
+  - vue-tsc --noEmit 零错误
+  - detail.vue 不再包含内联 PlanJson/DaysPlan/Item 接口定义
+  - detail.vue 不再使用 as PlanJson 类型断言
+  - normalizeTravelPlanRecord 处理 plan_json 为 null/string/object
+  - normalizeStructuredPlan 处理未知 resource_type
+  - RESOURCE_TYPE_META 包含全部 6 种类型
+  - SocialTargetType 为 5 类
+  - H5 + mp-weixin 构建通过
+
+测试命令：npm run type-check, npm run build:h5, npm run build:mp-weixin
+风险：无
+阻塞项：无
+现在可以开始：是
+
+================================================================================
+Task-2：计划 CRUD、分页、重试与重新生成
+────────────────────────────────────────────────────────────────────────────────
+目标：计划列表分页+下拉刷新+删除、详情加载重试+删除、
+      重新生成预填跳转、resource_id 可点击导航。
+
+责任方：前端
+前置条件：Task-1（类型+导航工具）
+输入：Task-1 类型体系, 后端已有 DELETE /api/travel/plans/:id
+输出：
+  - api/travel.ts 新增 deletePlan
+  - pages/plan/list.vue: 分页(滚动加载)+下拉刷新+左滑删除+二次确认
+  - pages/plan/detail.vue: 加载失败重试按钮 + 删除按钮 + 重新生成入口
+  - pages/plan/generate.vue: onLoad 读取 URL 参数预填表单
+  - plan/detail.vue: resource_id 可点击 → openResourceDetail()
+
+涉及文件：
+  修改：api/travel.ts, pages/plan/list.vue, pages/plan/detail.vue, pages/plan/generate.vue
+
+禁止修改：后端路由, AI Schema, manifest.json, pages.json 路由名称
+
+验收标准：
+  - 列表页可滚动到底部加载更多（翻页）
+  - 列表页可下拉刷新
+  - 列表页可删除计划（长按/左滑 → 确认弹窗 → 删除 → 列表刷新）
+  - 详情页加载失败显示重试按钮，点击重新请求
+  - 详情页可删除计划（底部按钮 → 确认 → 返回列表）
+  - 详情页点击 "重新生成" → 跳转生成页并预填 destination/days/budget
+  - 详情页 resource_id 可点击跳转（景点→scenic/detail, 其他→resource/detail）
+  - 生成页支持 ?from=regenerate&dest=杭州&days=3 参数预填
+  - H5 + mp-weixin 构建通过
+
+测试命令：npm run type-check, npm run build:h5, npm run build:mp-weixin
+风险：resource/detail.vue (Task-3) 未完成时，resource_id 跳转可能 toast
+      "资源详情暂不可用"（已在 openResourceDetail 中处理）
+阻塞项：Task-1
+现在可以开始：否（等待 Task-1）
+
+================================================================================
+Task-3：通用资源详情与酒店餐厅接入
+────────────────────────────────────────────────────────────────────────────────
+目标：新建 /pages/resource/detail 通用详情页，接入酒店、餐厅详情。
+
+责任方：前端
+前置条件：Task-1（类型+导航+meta）
+输入：后端 GET /api/travel/hotels/:id, GET /api/travel/restaurants/:id
+      （API 封装 api/travel.ts 中已存在 getHotelDetail/getRestaurantDetail）
+输出：
+  - pages/resource/detail.vue（通用资源详情）
+    · SafeImage + ResourceMeta + 描述 + ResourceSocialSection(预留)
+  - pages.json 新增 pages/resource/detail 路由
+  - api/travel.ts 无需修改（已有封装）
+  - pages/city/detail.vue: 酒店/餐厅点击改为 openResourceDetail()
+
+涉及文件：
+  新建：pages/resource/detail.vue
+  修改：pages.json, pages/city/detail.vue
+
+禁止修改：scenic/detail.vue, 后端路由, 收藏评论后端逻辑
+
+验收标准：
+  - 通用详情页可通过 type=hotel&id=xxx 正常展示酒店信息
+  - 通用详情页可通过 type=restaurant&id=xxx 正常展示餐厅信息
+  - SafeImage 正常加载
+  - 未知 type 显示"不支持的资源类型"
+  - city/detail 中酒店/餐厅点击跳转通用详情页（不再 toast "开发中"）
+  - 通用详情页暂不显示收藏评论按钮（等待 Task-5）
+  - H5 + mp-weixin 构建通过
+
+测试命令：npm run type-check, npm run build:h5, npm run build:mp-weixin
+风险：娱乐/商场类型虽已在 Task-1 定义但尚未接入（Task-4 完成）
+阻塞项：Task-1
+现在可以开始：否（等待 Task-1）
+
+================================================================================
+Task-4：娱乐/商场接入与城市五类资源
+────────────────────────────────────────────────────────────────────────────────
+目标：接入娱乐/商场 API，城市详情扩展到 5 Tab，通用详情页支持新类型。
+
+责任方：前端
+前置条件：Task-3（通用详情页）, Task-1（类型体系）
+输入：后端 GET /api/travel/entertainments, GET /api/travel/entertainments/:eid,
+      GET /api/travel/malls, GET /api/travel/malls/:mid
+输出：
+  - api/travel.ts 新增 getEntertainments, getEntertainmentDetail, getMalls, getMallDetail
+  - pages/city/detail.vue: 5 Tab（景点/酒店/餐厅/娱乐/商场）
+    · 懒加载 Tab 数据
+    · 已加载 Tab 缓存
+    · 每 Tab 独立分页
+    · 空数组显示"暂无XX数据"
+    · 网络错误显示重试
+  - pages/resource/detail.vue: 支持 entertainment/shopping_mall
+    · DISPLAY_FIELDS 扩展
+    · API_MAP 扩展
+
+涉及文件：
+  修改：api/travel.ts, pages/city/detail.vue, pages/resource/detail.vue
+
+禁止修改：后端路由, scenic/detail.vue, manifest.json
+
+验收标准：
+  - 城市详情可切换 5 个 Tab
+  - 娱乐 Tab 显示娱乐场所列表（36 重点城市有数据）
+  - 商场 Tab 显示商场列表
+  - 非重点城市娱乐/商场 Tab 显示 "暂无娱乐场所数据"
+  - 空数组 ≠ 错误状态（不显示红色错误提示）
+  - 网络错误与空数据区分（网络错误显示重试按钮）
+  - 娱乐/商场卡片可点击进入通用详情页
+  - 通用详情页正确展示娱乐/商场信息
+  - H5 + mp-weixin 构建通过
+
+测试命令：npm run type-check, npm run build:h5, npm run build:mp-weixin
+风险：36 重点城市外的娱乐/商场 Tab 始终为空（属于正常业务状态）
+阻塞项：Task-3
+现在可以开始：否（等待 Task-3）
+
+================================================================================
+Task-5：五类收藏评论接入
+────────────────────────────────────────────────────────────────────────────────
+目标：社交功能扩展到五类资源，通用详情页接入收藏评论按钮。
+
+责任方：前端
+前置条件：Task-4（通用详情支持娱乐/商场）
+输入：后端 social API（target_type 已支持 5 类）
+输出：
+  - types/social.ts: SocialTargetType 已为 5 类（Task-1 完成）
+  - pages/resource/detail.vue: ResourceSocialSection 组件
+    · 显示收藏状态
+    · 添加/取消收藏
+    · 评论列表
+    · 发表评论
+    · 编辑/删除自己的评论
+  - pages/scenic/detail.vue: 不变（已有完整社交功能）
+
+涉及文件：
+  修改：pages/resource/detail.vue
+  新建：components/ResourceSocialSection.vue（或内嵌在 resource/detail 中）
+
+禁止修改：后端 social API, scenic/detail.vue
+
+验收标准：
+  - 酒店详情页可收藏/取消收藏
+  - 餐厅详情页可收藏/取消收藏
+  - 娱乐详情页可收藏/取消收藏
+  - 商场详情页可收藏/取消收藏
+  - 五类资源均可查看评论列表
+  - 五类资源均可发表评论
+  - 五类资源均可编辑/删除自己的评论
+  - 收藏状态正确同步
+  - 未登录时显示登录引导
+  - 重复收藏显示 "已收藏" 提示
+  - H5 + mp-weixin 构建通过
+
+测试命令：npm run type-check, npm run build:h5, npm run build:mp-weixin
+         + 在生产后端验证 entertainment/shopping_mall 收藏评论
+风险：
+  - 后端 target_type 无枚举约束 → 发送合法值即可
+  - 娱乐/商场目标回显依赖 _resolve_target 数据完整性
+阻塞项：Task-4
+现在可以开始：否（等待 Task-4）
+
+================================================================================
+Task-6：实时交通接入
+────────────────────────────────────────────────────────────────────────────────
+目标：接入 transit API，计划详情支持按需查询实时路线。
+
+责任方：前端
+前置条件：Task-2（计划详情改进完成）, Task-4（类型体系含 transit 类型）
+输入：后端 GET /api/transit/route, GET /api/transit/between-spots, 交接文档响应样例
+输出：
+  - api/transit.ts（getTransitRoute, getTransitBetweenSpots）
+  - utils/transit-cache.ts（TransitCache 类，页面级 Map, TTL 5min）
+  - components/TransitInfo.vue（路线展示组件）
+    · 公交：segments 列表（步行段+公交段+换乘）
+    · 驾车：steps + traffic_lights + toll
+    · 步行/骑行：steps
+  - pages/plan/detail.vue：
+    · transport_to_next 旁 "查看路线" 按钮
+    · 方法选择器（transit/driving/walking/bicycling）
+    · 路线展开/收起
+    · 请求取消（onUnload abort）
+    · 失败降级（保留 AI 文本）
+
+涉及文件：
+  新建：api/transit.ts, utils/transit-cache.ts, components/TransitInfo.vue
+  修改：pages/plan/detail.vue
+
+禁止修改：后端 transit API, AI transport_to_next 生成逻辑
+
+验收标准：
+  - 计划详情中每条有 transport_to_next 且两端有 resource_id 的 item 显示 "查看路线"
+  - general_activity 类型 item 不显示 "查看路线"
+  - 点击 "查看路线" → 展开方法选择器（公交/驾车/步行/骑行）
+  - 选择方法后请求对应 transit API
+  - 公交模式正确展示换乘信息（线路名+上下车站+经停站数+票价）
+  - 驾车模式展示距离/时长/红绿灯/高速费
+  - 同一路线不重复请求（缓存命中）
+  - 页面卸载时 abort 进行中请求
+  - 失败时保留 transport_to_next 文本，显示 "路线查询失败，使用AI建议"
+  - 前端不持有 AMAP_KEY
+  - H5 + mp-weixin 构建通过
+
+测试命令：npm run type-check, npm run build:h5, npm run build:mp-weixin
+         + 测试 transit/driving/walking/bicycling 四种方式
+风险：
+  - transit 模式需 city 参数（从 PlanJSON destination.name 获取，字符串匹配可能失败）
+  - between-spots 仅支持景点间，通用 route 作为主接口
+  - 高德 API 可能限流
+阻塞项：Task-2, Task-4
+现在可以开始：否（等待 Task-2 + Task-4）
+
+================================================================================
+Task-7：AI 娱乐购物候选与 PlanJSON 1.1
+────────────────────────────────────────────────────────────────────────────────
+目标：AI 计划生成支持 entertainment/shopping_mall 候选资源。
+
+责任方：AI 组（Schema + Prompt + 验证），后端（候选查询）
+前置条件：无（独立于前端任务）
+输入：Task-1 确定的 resource_type 扩展需求
+输出：
+  - ai/xingzhi_ai/plan_schema.py:
+    · VALID_RESOURCE_TYPES += entertainment, shopping_mall
+    · _RESOURCE_TYPE_MAP += 中文映射（娱乐/娱乐场所/KTV/电影院/商场/购物/购物中心）
+    · schema_version default = "1.1"
+    · get_all_resource_ids += entertainment, shopping_mall
+  - backend/app/services/ai_plan_service.py:
+    · get_top_entertainments_by_city + get_top_malls_by_city
+    · entertainment_by_id + mall_by_id 映射
+    · _build_plan_user_message 增加娱乐/商场候选区块
+    · _format_entertainment_line / _format_mall_line
+  - ai/xingzhi_ai/plan_validation.py:
+    · validate_plan_resources 增加 entertainment/mall 校验
+  - ai/xingzhi_ai/plan_prompts.py:
+    · JSON 示例增加 entertainment/shopping_mall item
+  - ai/xingzhi_ai/plan_renderer.py:
+    · 新增娱乐/商场类型渲染
+
+涉及文件：
+  后端：ai_plan_service.py, plan_schema.py, plan_validation.py, plan_prompts.py, plan_renderer.py
+
+禁止修改：前端文件, 后端 transit/travel API, 数据库表结构
+
+验收标准：
+  - AI 生成计划中可能出现 entertainment 类型 item（当偏好含娱乐时）
+  - AI 生成计划中可能出现 shopping_mall 类型 item（当偏好含购物时）
+  - 所有 entertainment/shopping_mall resource_id 均来自候选数据库
+  - 无真实候选数据时不生成虚假 ID
+  - 普通自然风光行程不强制包含娱乐/商场
+  - schema_version 输出 "1.1"
+  - 中文 resource_type 自动映射为英文（"娱乐"→"entertainment"）
+  - 前端 1.1 计划正常渲染（Task-1 适配层已兼容）
+
+测试命令：python -m pytest ai/tests/ -v
+         + 生成不同偏好组合的测试计划
+风险：
+  - AI 可能在无候选数据时虚构 resource_id（需严格 Prompt 约束 + 验证拒绝）
+  - 中文映射词过多可能导致误映射
+  - Prompt 长度可能显著增加（候选数量需控制）
+阻塞项：无
+现在可以开始：是（不依赖前端任务）
+
+================================================================================
+Task-8：三端联调与总体验收
+────────────────────────────────────────────────────────────────────────────────
+目标：H5 + 微信小程序 + Android 三端回归测试，修复跨平台问题，
+      验证完整六要素闭环。
+
+责任方：前端
+前置条件：Task-1 至 Task-7 全部完成
+输入：所有已完成任务
+输出：
+  - 三端回归测试通过清单
+  - 已知问题修复
+  - Android 真机截图（至少首页/城市详情/计划详情/交通查询）
+  - 性能报告（计划详情渲染时间/节点数）
+  - 最终验收清单
+
+验收标准：
+  - H5: 构建通过 + 浏览器功能正常 + 14 页均可用
+  - 微信小程序: 构建通过 + 开发者工具预览正常
+  - Android: HBuilderX 运行正常
+  - 计划生成 → 详情(含娱乐/商场 item) → 列表 → 删除 → 重新生成 完整闭环
+  - 5 类资源详情均可访问（视数据可用性）
+  - 收藏评论 5 类均正常
+  - Transit 四种方式均可查询
+  - AI 对话正常
+  - 无 console 错误
+  - 无白屏或布局崩溃
+  - SafeImage 降级正常
+  - TabBar 跳转正确
+  - API Base URL 三端正确
+  - Transit 在真机可访问
+
+测试命令：
+  npm run type-check, npm run build:h5, npm run build:mp-weixin
+  + HBuilderX Android 运行
+  + 微信开发者工具预览
+
+风险：
+  - Android 真机 API Base URL 配置（局域网地址 vs Render HTTPS）
+  - 微信小程序 request 域名白名单
+  - 娱乐/商场数据在 Render 是否导入（可能为空）
+  - AMAP_KEY 是否在 Render 配置（transit 可能返回 error）
+阻塞项：Task-1~7
+现在可以开始：否
+
+
+22. 任务依赖图
+────────────────────────────────────────────────────────────────────────────────
+
+  Task-1 (类型+适配)
+  ├── Task-2 (CRUD+分页+重试) ──────────────────────┐
+  │   └── Task-6 (交通) ────────────────────────────┤
+  └── Task-3 (通用详情+酒店餐厅)                     │
+      └── Task-4 (娱乐商场+5Tab) ────────────────────┤
+          └── Task-5 (收藏评论5类) ──────────────────┤
+                                                      ├── Task-8 (验收)
+  Task-7 (AI 娱乐购物候选) ──────────────────────────┘
+  (独立于前端任务，可与 Task-1 并行开始)
+
+  并行组：
+    [Task-2 + Task-3] 可并行（都只依赖 Task-1）
+    [Task-6 的类型/API 封装 + Task-4] 可并行
+    [Task-7] 完全独立，可随时开始
+
+  串行链：
+    Task-1 → Task-3 → Task-4 → Task-5
+    Task-1 → Task-2 → Task-6
+
+
+23. 可立即并行开始的任务
+────────────────────────────────────────────────────────────────────────────────
+  ✅ Task-1（前端类型+适配层）— 零外部依赖
+  ✅ Task-7（AI 娱乐购物候选）— 零前端依赖，AI 组可立即开始
+
+
+24. 只阻塞生产验收的事项
+────────────────────────────────────────────────────────────────────────────────
+  ⚠️ 娱乐/商场数据是否已导入 Render TiDB → 阻塞 Task-8 生产验证，不阻塞 Task-1~6
+  ⚠️ AMAP_KEY 是否已在 Render 配置 → 阻塞 Task-8 transit 生产验证
+  ⚠️ 后端 target_type 无枚举约束 → 不阻塞开发，属于后端非阻塞技术债
+
+
+25. 需要 AI 或后端协作的事项
+────────────────────────────────────────────────────────────────────────────────
+  Task-7（AI 组 + 后端）：
+    - plan_schema.py VALID_RESOURCE_TYPES 扩展
+    - ai_plan_service.py 候选查询扩展
+    - plan_validation.py 验证扩展
+    - plan_prompts.py JSON 示例更新
+    - plan_renderer.py 渲染扩展
+
+  Task-8（后端）：
+    - Render 数据导入确认
+    - AMAP_KEY 配置确认
+
+
+26. 最大风险
+────────────────────────────────────────────────────────────────────────────────
+  1. AI 扩展延迟（Task-7）
+     风险：前端完成所有资源展示，但 AI 计划仍无法生成含娱乐/商场的计划
+     缓解：Task-7 可以与 Task-1 并行开始，不应等待前端完成后再启动
+
+  2. 娱乐/商场仅 36 城市有数据
+     风险：用户选择非重点城市时，娱乐/商场 Tab 始终为空
+     缓解：前端正确展示空状态，不显示为错误
+
+  3. Transit city 参数匹配
+     风险：PlanJSON destination.name 与高德 API city 参数要求不一致
+     缓解：后端 transit_service 使用数据库中 city.name，匹配度高
+
+  4. Android 真机 API Base URL
+     风险：开发环境 API Base URL 配置不当导致真机无法访问后端
+     缓解：使用渲染后端 HTTPS 地址，或配置局域网 IP
+
+
+27. 最终结论
+────────────────────────────────────────────────────────────────────────────────
+  问题                                          答案
+  ─────────────────────────────────────────────────────────────────────────
+  后端资源代码是否已经同步？                    是（commit 4c3154d 含全部 P4 代码）
+  娱乐和商场前端是否可以立即开发？              是（先 Task-1 类型体系，再 Task-4 接入）
+  Transit 前端是否可以立即开发？                是（先 Task-1 类型，再 Task-6 接入）
+  收藏评论是否可以扩展到五类？                  是（Task-5，后端已支持）
+  AI 当前是否覆盖娱乐和购物？                   否（需要 Task-7）
+  是否需要修改 schema_version？                 是（升级到 1.1）
+  实时交通是否写入 PlanJSON？                   否（仅页面缓存，不持久化）
+  是否需要 Plan Store？                         否
+  第一项任务是什么？                            Task-1（领域类型体系与 PlanJSON 适配层）
+  Task-2 和 Task-3 是否可以并行？               是（都只依赖 Task-1）
+  Task-7 是否可以与 Task-1 并行开始？           是（AI 组独立工作）
+  是否可以开始准备 Task-1 实施提示词？          是
+
+================================================================================
+  报告完成时间：2026-07-23
+  0 文件修改
+================================================================================

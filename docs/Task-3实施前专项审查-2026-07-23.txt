@@ -1,0 +1,680 @@
+================================================================================
+  Task-3：通用资源详情、酒店餐厅接入与统一导航 — 实施前专项审查
+  日期：2026-07-23
+  分支：feat/HBuilderX-to-CLI (4c3154d)
+================================================================================
+
+1. 审查基线
+────────────────────────────────────────────────────────────────────────────────
+分支              feat/HBuilderX-to-CLI
+Commit            4c3154d
+Task-1            已实现 (4?? + 3M)
+Task-2            已实现 (5M，与 Task-1 共存)
+Git 状态          7M + 4?? + 4 docs??（干净，仅待提交）
+type-check        ✅ 零错误
+H5 构建           ✅ DONE
+mp-weixin 构建    ✅ DONE
+
+
+2. 当前资源类型矩阵
+────────────────────────────────────────────────────────────────────────────────
+类型             定义位置            字段数  详情API存在   当前调用方
+────────────────────────────────────────────────────────────────────────────
+ScenicSpot       types/travel.ts:24  11      ✅            home, city/detail, scenic/detail, favorites
+Hotel            types/travel.ts:42  11      ✅            city/detail (列表)
+Restaurant       types/travel.ts:58  10      ✅            city/detail (列表)
+Entertainment    types/travel.ts:70  11      ❌ 未封装     无
+ShoppingMall     types/travel.ts:86  11      ❌ 未封装     无
+general_activity types/resource.ts   —       N/A           plan/detail (渲染)
+
+Hotel/Restaurant/Entertainment/ShoppingMall 的详情 API 均不存在前端封装。
+后端路由均已就绪（已在 P4 更新中合并）：
+  GET /api/travel/hotels/{hotel_id}     → HotelResponse
+  GET /api/travel/restaurants/{restaurant_id} → RestaurantResponse
+  GET /api/travel/entertainments/{eid}  → EntertainmentResponse
+  GET /api/travel/malls/{mid}           → ShoppingMallResponse
+
+确认结论：
+  - getHotelDetail 和 getRestaurantDetail 已存在于 api/travel.ts ✅
+  - getEntertainmentDetail 和 getMallDetail 未封装 → Task-4
+
+
+3. 前端旅行 API 矩阵
+────────────────────────────────────────────────────────────────────────────────
+函数                  方法  路径                            返回类型        调用方
+────────────────────────────────────────────────────────────────────────────
+getCities             GET   /api/travel/cities              City[]          home
+getCityDetail         GET   /api/travel/cities/:id          City            city/detail
+getScenics            GET   /api/travel/scenics             ScenicSpot[]    home, city/detail
+getScenicDetail       GET   /api/travel/scenics/:id         ScenicSpot      scenic/detail, favorites
+getHotels             GET   /api/travel/hotels              Hotel[]         city/detail
+getHotelDetail        GET   /api/travel/hotels/:id          Hotel           无调用方 ❌
+getRestaurants        GET   /api/travel/restaurants         Restaurant[]    city/detail
+getRestaurantDetail   GET   /api/travel/restaurants/:id     Restaurant      无调用方 ❌
+getMyPlans            GET   /api/travel/plans               TravelPlan[]    plan/list
+getPlanDetail         GET   /api/travel/plans/:id           TravelPlan      plan/detail
+deletePlan            DELETE /api/travel/plans/:id          void            plan/list, plan/detail
+
+getHotelDetail 和 getRestaurantDetail 已封装但无调用方。
+Task-3 无需新增 API 函数。
+
+
+4. 酒店后端契约
+────────────────────────────────────────────────────────────────────────────────
+字段           ORM类型              Response Schema        前端 Hotel          差异
+────────────────────────────────────────────────────────────────────────────
+id             int PK               int                    number              ✅
+city_id        int FK               int                    number              ✅
+name           String(100) NOT NULL str (max=100)           string              ✅
+description    Text NULL            Optional[str]           string|null         ✅
+address        String(500) NULL     Optional[str] (500)     string|null         ✅
+price          DECIMAL(10,2) NULL   Optional[float] (ge=0)  number|string|null  ⚠️ 前端多 string
+score          DECIMAL(3,1) NULL    Optional[float] (0-5)   number|string|null  ⚠️ 前端多 string
+open_time      String(100) NULL     Optional[str] (100)     string|null         ✅
+latitude       DECIMAL(10,7) NULL   Optional[float]         number|string|null  ⚠️ 前端多 string
+longitude      DECIMAL(10,7) NULL   Optional[float]         number|string|null  ⚠️ 前端多 string
+image_url      String(500) NULL     Optional[str] (500)     string|null         ✅
+
+REST 路径: GET /api/travel/hotels/{hotel_id}
+参数名: hotel_id (Path)
+认证: 无
+不存在: 404 {"detail": "酒店不存在"}
+
+酒店没有 category 或 star_rating 字段（区别于餐厅）。
+
+
+5. 餐厅后端契约
+────────────────────────────────────────────────────────────────────────────────
+字段           ORM类型              Response Schema        前端 Restaurant     差异
+────────────────────────────────────────────────────────────────────────────
+id             int PK               int                    number              ✅
+city_id        int FK               int                    number              ✅
+name           String(100) NOT NULL str (max=100)           string              ✅
+category       String(50) NULL      Optional[str] (50)     string|null         ✅
+description    Text NULL            Optional[str]           string|null         ✅
+price_level    String(20) NULL      Optional[str] (20)     string|null         ✅
+score          DECIMAL(3,1) NULL    Optional[float] (0-5)   number|string|null  ⚠️
+address        String(500) NULL     Optional[str] (500)     string|null         ✅
+latitude       DECIMAL(10,7) NULL   Optional[float]         number|string|null  ⚠️
+longitude      DECIMAL(10,7) NULL   Optional[float]         number|string|null  ⚠️
+image_url      String(500) NULL     Optional[str] (500)     string|null         ✅
+
+REST 路径: GET /api/travel/restaurants/{restaurant_id}
+参数名: restaurant_id (Path)
+认证: 无
+不存在: 404 {"detail": "餐厅不存在"}
+
+餐厅的 price_level 是字符串（非数字），与酒店的 price (float) 语义不同。
+
+
+6. 前后端字段差异汇总
+────────────────────────────────────────────────────────────────────────────────
+差异                                   影响                  Task-3 策略
+────────────────────────────────────────────────────────────────────────────
+Hotel/Restaurant score/price/lat/lng   可能返回 string      保持现有 `number|string|null`
+使用 `number|string|null`              但不是实际常见情况    不改变（Task-3 不改类型文件）
+Hotel 无 category, Restaurant 有       详情页展示不同        通过 ViewModel 区分
+Restaurant price_level (string)        Hotel 的 price 是数字  ViewModel 归一化为 priceText
+Hotel open_time, Restaurant 无         Hotel 独有字段         ViewModel 按实体区分
+
+
+7. 景点详情页结构（参考）
+────────────────────────────────────────────────────────────────────────────────
+  路由: /pages/scenic/detail?id=xxx（pages.json 已注册）
+  生命周期: onLoad 获取 id
+  数据加载: getScenicDetail(id)
+  状态: loading / error / ready
+  组件:
+    - NavBar (自定义导航, showBack)
+    - SafeImage (图片 + 降级)
+    - ReviewItem (评论列表)
+    - EmptyState, Loading
+  功能:
+    - 收藏 (addFavorite / deleteFavorite / 状态查询)
+    - 评论 (getReviews / createReview)
+    - ID 校验 + 错误处理
+
+  scenic/detail.vue 约 450 行（含完整的收藏评论逻辑）。
+  不应在 Task-3 重构此文件。
+
+
+8. 城市详情当前点击链路
+────────────────────────────────────────────────────────────────────────────────
+来源             资源类型       当前点击行为              目标
+────────────────────────────────────────────────────────────────────────────
+city/detail      景点(ScenicSpot) uni.navigateTo            ✅ /pages/scenic/detail?id=
+city/detail      酒店(Hotel)      uni.showToast("开发中")   ❌ 无导航
+city/detail      餐厅(Restaurant)  uni.showToast("开发中")   ❌ 无导航
+
+城市详情中酒店/餐厅使用 ScenicCard 组件展示（props: scenicId/name/score/price等）。
+点击事件通过 @click emit。需要修改 onHotelTap/onRestaurantTap 替换 toast 为真实导航。
+
+
+9. 计划详情资源引用
+────────────────────────────────────────────────────────────────────────────────
+来源                    resource_type      resource_id      当前点击行为
+────────────────────────────────────────────────────────────────────────────
+plan/detail item        scenic_spot        可能为数字       ❌ 无点击
+plan/detail item        hotel              可能为数字       ❌ 无点击
+plan/detail item        restaurant         可能为数字       ❌ 无点击
+plan/detail item        general_activity   通常为 null      ❌ 无点击（应始终不可点击）
+plan/detail item        unknown             可能为 null      ❌ 无点击（应不可点击）
+plan/detail meal        通常 restaurant    可能为数字       ❌ 无点击
+plan/detail hotel       通常 hotel          可能为数字       ❌ 无点击
+
+当前模板渲染 item.name 为普通 `<text>`。
+需要增加条件点击：
+  - 有 resource_id 且类型为 scenic_spot → 跳转景点详情
+  - 有 resource_id 且类型为 hotel → 跳转通用详情(type=hotel)
+  - 有 resource_id 且类型为 restaurant → 跳转通用详情(type=restaurant)
+  - general_activity / unknown / 无 resource_id → 不生成点击
+
+meal 和 day hotel 同理。
+
+
+10. 通用详情页面方案比较
+────────────────────────────────────────────────────────────────────────────────
+  方案 A: 酒店/餐厅各自独立页面
+    /pages/hotel/detail.vue, /pages/restaurant/detail.vue
+    优点: 类型精确，各自优化
+    缺点: 大量重复代码，Task-4 还要再加两个页面
+
+  方案 B: 一个通用页面 (推荐)
+    /pages/resource/detail?type=hotel&id=123
+    优点: 代码复用，Task-4 扩展只需增加 loader
+    缺点: 需要 type 参数校验，字段展示需要分支
+
+  方案 C: 全部统一（包括景点）
+    优点: 最极致复用
+    缺点: 景点已有完整社交逻辑，重写成本高
+
+  决策：方案 B
+  理由：
+    1. 景点保留独立页（避免重构 450 行的社交逻辑）
+    2. 酒店/餐厅/娱乐/商场字段高度相似（10/11 个字段中 9 个共用）
+    3. 通用页面通过 ViewModel adapter 处理少量差异字段
+    4. Task-4 扩展娱乐/商场只需增加一行 loader 映射
+
+
+11. 最终页面架构
+────────────────────────────────────────────────────────────────────────────────
+  路由注册 (pages.json 新增 1 个)：
+    /pages/resource/detail    — 通用资源详情页（酒店/餐厅/娱乐/商场）
+
+  不注册：
+    /pages/hotel/detail
+    /pages/restaurant/detail
+    /pages/entertainment/detail
+    /pages/mall/detail
+
+  导航规则：
+    scenic_spot → /pages/scenic/detail?id=xxx（现有路径，不变）
+    hotel → /pages/resource/detail?type=hotel&id=xxx
+    restaurant → /pages/resource/detail?type=restaurant&id=xxx
+    entertainment → /pages/resource/detail?type=entertainment&id=xxx (Task-4)
+    shopping_mall → /pages/resource/detail?type=shopping_mall&id=xxx (Task-4)
+    general_activity → 不生成 URL（无详情页）
+
+
+12. 统一导航工具设计
+────────────────────────────────────────────────────────────────────────────────
+  新建：frontend/src/utils/navigation.ts
+
+  import { isNavigableResourceType, type NavigableResourceType, type TravelResourceType } from '@/types/resource'
+
+  /** 正整数校验 */
+  export function isValidResourceId(id: unknown): id is number {
+    return typeof id === 'number' && Number.isInteger(id) && id > 0
+  }
+
+  /** 构造资源详情页 URL。general_activity 返回 null。未知类型返回 null。 */
+  export function getResourceDetailUrl(type: TravelResourceType, id: number | null | undefined): string | null {
+    if (!isValidResourceId(id)) return null
+    if (!isNavigableResourceType(type)) return null
+
+    if (type === 'scenic_spot') {
+      return `/pages/scenic/detail?id=${id}`
+    }
+
+    // hotel / restaurant / entertainment / shopping_mall → 通用详情页
+    return `/pages/resource/detail?type=${type}&id=${id}`
+  }
+
+  /** 打开资源详情页。不 Toast（由调用方决定 UI）。 */
+  export function openResourceDetail(type: TravelResourceType, id: number | null | undefined): void {
+    const url = getResourceDetailUrl(type, id)
+    if (!url) return
+    uni.navigateTo({ url })
+  }
+
+  函数职责分离：
+    getResourceDetailUrl: 纯函数，URL 构造 + 校验
+    openResourceDetail: 导航执行（调用 uni.navigateTo）
+
+  不包含：API 请求、Toast、收藏评论、Transit
+
+
+13. 导航支持类型边界
+────────────────────────────────────────────────────────────────────────────────
+  类型                   getResourceDetailUrl 返回    Task-3 行为
+  ────────────────────────────────────────────────────────────────────
+  scenic_spot            景点详情 URL               ✅ 直接跳转
+  hotel                  通用详情 URL               ✅ 直接跳转
+  restaurant             通用详情 URL               ✅ 直接跳转
+  entertainment          通用详情 URL               ⚠️ 跳转但详情页提示"暂未支持"
+  shopping_mall          通用详情 URL               ⚠️ 跳转但详情页提示"暂未支持"
+  general_activity       null                       不生成入口
+  unknown (normalized)   null                       不生成入口
+
+  Task-3 方案：
+    - 导航工具对 5 类可导航资源均返回有效 URL
+    - 通用详情页运行时只正式加载 hotel/restaurant
+    - entertainment/shopping_mall 进入时显示 "娱乐/商场详情即将上线"（轻量提示 + 返回）
+    - 不崩溃，不发 API 请求
+
+  这样 Task-4 只需增加 loader + adapter + 移除提示，无需修改导航工具。
+
+
+14. 详情 API 加载策略
+────────────────────────────────────────────────────────────────────────────────
+  决策：请求函数映射表（方案 B）
+
+  在通用详情页内定义：
+    const DETAIL_LOADERS: Record<string, (id: number) => Promise<unknown>> = {
+      hotel: getHotelDetail,
+      restaurant: getRestaurantDetail,
+    }
+
+  加载函数：
+    async function loadResource(): Promise<void> {
+      const loader = DETAIL_LOADERS[resourceType.value]
+      if (!loader) { /* 未支持类型 */ return }
+      const data = await loader(resourceId.value)
+      // 类型守卫 + 设置状态
+    }
+
+  不使用的方案：
+    - switch/case: Task-4 扩展需要改源码
+    - as any/as Hotel & Restaurant: 不安全
+
+  返回类型处理：
+    使用联合类型 `ResourceDetailEntity = Hotel | Restaurant`
+    loader 返回 unknown → 类型守卫验证 → 安全赋值
+
+
+15. ResourceDetailEntity 设计
+────────────────────────────────────────────────────────────────────────────────
+  不新建类型文件。在通用详情页内定义：
+
+    type SupportedDetailType = 'hotel' | 'restaurant'
+    type ResourceDetailEntity = Hotel | Restaurant
+
+    const SUPPORTED_TYPES: Set<string> = new Set(['hotel', 'restaurant'])
+
+  Task-4 扩展为：
+    type SupportedDetailType = 'hotel' | 'restaurant' | 'entertainment' | 'shopping_mall'
+    type ResourceDetailEntity = Hotel | Restaurant | Entertainment | ShoppingMall
+
+
+16. ResourceDetailViewModel 设计
+────────────────────────────────────────────────────────────────────────────────
+
+  决策：轻量 ViewModel adapter（方案 B）
+  不把所有实体压成最小公共字段，保留实体差异。
+
+  在通用详情页内定义 adapter 函数：
+
+  // 公共基础字段
+  interface ResourceBaseFields {
+    name: string
+    imageUrl: string | null
+    description: string | null
+    address: string | null
+    score: number | null
+    latitude: number | null
+    longitude: number | null
+  }
+
+  // Hotel 独有
+  function adaptHotel(h: Hotel): ResourceBaseFields & {
+    priceText: string | null     // "¥300"
+    openTime: string | null
+    categoryText: null           // Hotel 无 category
+  }
+
+  // Restaurant 独有
+  function adaptRestaurant(r: Restaurant): ResourceBaseFields & {
+    priceText: string | null     // "人均 ¥50" 或 price_level 原文
+    openTime: null               // Restaurant 无 open_time
+    categoryText: string | null  // 菜系
+  }
+
+  adapter 只做格式化和字段重命名，不丢失实体独有字段。
+
+  模板通过 v-if/v-else-if 按 resourceType 分支渲染差异字段。
+  不对所有实体使用同一个循环渲染（避免过度抽象）。
+
+
+17. 酒店字段展示方案
+────────────────────────────────────────────────────────────────────────────────
+  必须展示：名称、图片、地址、评分、价格、描述
+  可选展示：营业时间、经纬度
+  不展示：city_id（内部字段）
+
+  格式化：
+    名称: 原样
+    图片: SafeImage
+    地址: 📍 前缀 + 原样
+    评分: ⭐ prefix + score (0-5)
+    价格: ¥ 前缀 + price（null 时不显示行）
+    描述: 原样（空时隐藏整段）
+    营业时间: 🕐 前缀
+    经纬度: 不展示（无地图集成）
+
+
+18. 餐厅字段展示方案
+────────────────────────────────────────────────────────────────────────────────
+  必须展示：名称、图片、地址、评分、菜系、人均、描述
+  可选展示：经纬度
+  不展示：city_id
+
+  格式化：
+    名称: 原样
+    图片: SafeImage
+    地址: 📍 前缀
+    评分: ⭐ prefix
+    菜系: 🍳 前缀 + category
+    人均: 💰 前缀 + price_level（原样字符串，如 "中等" / "人均¥80"）
+    描述: 原样
+
+
+19. SafeImage 复用结论
+────────────────────────────────────────────────────────────────────────────────
+  SafeImage props: src, mode, fallback
+  通用详情页直接使用。不修改 SafeImage。
+  无兼容问题。
+
+
+20. 错误和重试状态
+────────────────────────────────────────────────────────────────────────────────
+  错误类型：
+    invalidType — type 参数非法或不在 SUPPORTED_TYPES 中
+    invalidId — id 参数非法
+    notFound — 资源不存在 (404)
+    network — 网络错误
+    unknown — 其他
+
+  交互：
+    invalidType/invalidId: 显示提示 + 返回按钮（不重试）
+    notFound: 显示"资源不存在" + 返回按钮（不重试）
+    network: 显示"网络请求失败" + 重试按钮 + 返回按钮
+    unknown: 同 network
+
+  复用 Task-2 的 classifyPlanLoadError 模式（不抽取公共模块）。
+
+
+21. 社交能力边界
+────────────────────────────────────────────────────────────────────────────────
+  决策：方案 A — Task-3 不显示收藏评论
+
+  理由：
+    - 收藏评论 UI 涉及多个组件（星星评分、评论列表、发表表单）
+    - 景点页已有完整实现，Task-5 统一处理
+    - Task-3 提前实现会导致 Task-5 时重复/重构
+
+  Task-3 措施：
+    - 通用详情页不渲染任何收藏/评论 UI
+    - 预留布局位置（底部空白区域）
+    - 代码结构中 COMMENT/FUTURE: Task-5 注释标记
+
+  Task-5 接入方式：
+    - 通用详情页内 ResourceSocialSection 组件
+    - SocialTargetType 自动支持五类
+    - 无需修改 pages.json
+
+
+22. Task-4 扩展边界
+────────────────────────────────────────────────────────────────────────────────
+  Task-3 的通用详情页应保证 Task-4 只增加：
+    1. DETAIL_LOADERS 增加 2 行映射
+    2. SUPPORTED_TYPES 增加 2 个值
+    3. adapter 增加 2 个函数
+    4. 模板增加 entertainment/shopping_mall 分支
+    5. 移除"暂未支持"提示
+
+  Task-3 不应：
+    - 硬编码只有 hotel/restaurant
+    - 将类型写死在 switch 中
+    - 需要改路由或 pages.json
+
+
+23. 城市详情接入方案
+────────────────────────────────────────────────────────────────────────────────
+  修改 city/detail.vue：
+    onHotelTap(id) → openResourceDetail('hotel', id)
+    onRestaurantTap(id) → openResourceDetail('restaurant', id)
+
+  不修改：
+    - 景点卡片点击（goScenicDetail 保持不变）
+    - Tab 结构（Task-4 扩展）
+    - 数据加载策略
+
+
+24. 计划详情接入方案
+────────────────────────────────────────────────────────────────────────────────
+  修改 plan/detail.vue：
+
+  为 item name 增加条件点击：
+    scenic_spot + resource_id → openResourceDetail('scenic_spot', id)
+    hotel + resource_id → openResourceDetail('hotel', id)
+    restaurant + resource_id → openResourceDetail('restaurant', id)
+
+  为 meal name 增加条件点击：
+    resource_id 存在 → openResourceDetail('restaurant', id)
+
+  为 hotel name 增加条件点击：
+    resource_id 存在 → openResourceDetail('hotel', id)
+
+  实现：
+    <text :class="{ 'clickable': canNavigate(item) }" @tap="navigateResource(item)">
+      {{ item.name }}
+    </text>
+
+    function canNavigate(item: PlanTimelineItem): boolean {
+      return isValidResourceId(item.resource_id)
+        && isNavigableResourceType(item.resource_type as string)
+        && item.resource_type !== 'general_activity'
+    }
+
+  不修改 resource_type 标签（保留现有 resourceLabel 显示）。
+
+
+25. 是否需要新类型文件
+────────────────────────────────────────────────────────────────────────────────
+  不需要。所有类型需求均可使用现有文件：
+    - types/resource.ts (NavigableResourceType, 类型守卫)
+    - types/travel.ts (Hotel, Restaurant)
+    - types/plan.ts (PlanTimelineItem 的 resource_type/resource_id)
+
+  通用详情页内的 ViewModel/adapter 内联在页面中。
+  navigation.ts 只依赖 resource.ts 和 uni API。
+
+
+26. 是否需要新组件
+────────────────────────────────────────────────────────────────────────────────
+  不需要。Task-3 新增页面只有一个调用方。
+  收藏评论组件在 Task-5 时才需要抽取。
+  SafeImage 已可直接复用。
+
+
+27. Task-3 最终文件范围
+────────────────────────────────────────────────────────────────────────────────
+
+  新建 (2 个):
+    1. frontend/src/pages/resource/detail.vue  — 通用资源详情页
+    2. frontend/src/utils/navigation.ts         — 导航工具函数
+
+  修改 (4 个):
+    3. frontend/src/pages/city/detail.vue       — onHotelTap/onRestaurantTap 替换为 openResourceDetail
+    4. frontend/src/pages/plan/detail.vue       — item/meal/hotel 名称增加条件点击
+    5. frontend/src/pages.json                  — 注册 /pages/resource/detail 路由
+    6. frontend/src/types/travel.ts             — 仅当 type-check 要求才修改
+
+  不修改:
+    - scenic/detail.vue（保持独立）
+    - api/travel.ts（getHotelDetail/getRestaurantDetail 已存在）
+    - SafeImage.vue
+    - types/plan.ts
+    - types/resource.ts
+
+
+28. 明确移出 Task-3 的内容
+────────────────────────────────────────────────────────────────────────────────
+  内容                    移入任务    理由
+  ─────────────────────────────────────────────────────────────────
+  娱乐/商场详情接入         Task-4     API 封装 + adapter + 加载器扩展
+  收藏评论 UI              Task-5     景点社交逻辑需要统一抽取
+  城市 5 Tab               Task-4     与娱乐商场列表一起做
+  Transit                   Task-6     独立模块
+  娱乐/商场 API 封装        Task-4     getEntertainments/getMalls 等
+  SafeImage 修改            不实施     无修改必要
+  plan-normalizer 修改     不实施     无修改必要
+
+
+29. 实施步骤
+────────────────────────────────────────────────────────────────────────────────
+  步骤  操作                            文件                      验证
+  ──────────────────────────────────────────────────────────────────────────
+  1     创建 utils/navigation.ts        新建                      type-check
+  2     创建 pages/resource/detail.vue  新建                      type-check
+  3     注册 pages.json 路由            pages.json                构建
+  4     修改 city/detail 酒店/餐厅跳转   city/detail.vue           type-check
+  5     修改 plan/detail 资源点击        plan/detail.vue            type-check
+  6     npm run type-check              全项目                    零错误
+  7     npm run build:h5                全项目                    构建成功
+  8     npm run build:mp-weixin         全项目                    构建成功
+  9     检查 diff                        全项目                    仅预期文件变化
+
+
+30. 测试矩阵
+────────────────────────────────────────────────────────────────────────────────
+  30.1 导航工具
+    TC01 scenic_spot+正常ID → /pages/scenic/detail?id=xxx
+    TC02 hotel+正常ID → /pages/resource/detail?type=hotel&id=xxx
+    TC03 restaurant+正常ID → /pages/resource/detail?type=restaurant&id=xxx
+    TC04 general_activity → null
+    TC05 unknown → null
+    TC06 id=null → null
+    TC07 id=0 → null
+    TC08 id=-1 → null
+    TC09 entertainment → 有效 URL（Task-4 前提示未支持）
+    TC10 shopping_mall → 有效 URL（Task-4 前提示未支持）
+
+  30.2 通用详情页
+    TC11 type=hotel&id=N 正常加载
+    TC12 type=restaurant&id=N 正常加载
+    TC13 type=invalid → 不支持提示
+    TC14 id=0 → 参数无效提示
+    TC15 资源不存在(404) → notFound 提示
+    TC16 网络失败 → 重试按钮
+    TC17 重试成功
+    TC18 图片为空 → SafeImage 降级
+    TC19 描述/地址/评分/价格为空 → 不显示对应行
+    TC20 type=entertainment → 提示即将上线（不请求）
+    TC21 type=shopping_mall → 提示即将上线（不请求）
+
+  30.3 城市详情
+    TC22 点击酒店卡片 → 通用详情页加载
+    TC23 点击餐厅卡片 → 通用详情页加载
+    TC24 景点卡片 → 仍跳转 scenic/detail
+
+  30.4 计划详情
+    TC25 scenic_spot item 可点击 → scenic/detail
+    TC26 hotel item 可点击 → resource/detail?type=hotel
+    TC27 restaurant item 可点击 → resource/detail?type=restaurant
+    TC28 meal 可点击 → resource/detail?type=restaurant
+    TC29 hotel 住宿可点击 → resource/detail?type=hotel
+    TC30 general_activity → 不生成点击
+    TC31 resource_id=null → 不生成点击
+    TC32 unknown → 不生成点击
+
+
+31. 验收标准
+────────────────────────────────────────────────────────────────────────────────
+    1.  type-check 零错误
+    2.  H5 构建通过
+    3.  mp-weixin 构建通过
+    4.  景点详情页保持独立
+    5.  新增 /pages/resource/detail 通用详情页
+    6.  通用页正式支持 hotel 和 restaurant
+    7.  getHotelDetail/getRestaurantDetail 被调用（不再"无调用方"）
+    8.  非法 type → 不发请求 + 安全提示
+    9.  非法 id → 不发请求 + 安全提示
+    10. 404 与网络错误区分
+    11. 网络失败可重试
+    12. SafeImage 正常复用
+    13. 空字段不显示错误占位
+    14. 城市详情酒店可导航到详情
+    15. 城市详情餐厅可导航到详情
+    16. 计划详情 scenic/hotel/restaurant item 可导航
+    17. 计划详情 meal 可导航到餐厅详情
+    18. 计划详情 hotel 可导航到酒店详情
+    19. general_activity 不生成详情入口
+    20. resource_id 非法不生成入口
+    21. entertainment/shopping_mall 导航可用但详情提示"即将上线"
+    22. 不接入收藏评论
+    23. 不接入 Transit
+    24. 无新增依赖
+    25. lockfile 不变
+    26. 后端/AI 不变
+    27. 无新建类型文件
+
+
+32. 风险
+────────────────────────────────────────────────────────────────────────────────
+  R01  Hotel/Restaurant 的 score/price 为 string 时解析失败
+       缓解：Template 中做 typeof 检查 + fallback '--'
+
+  R02  plan/detail 资源名称点击与滚动冲突
+       缓解：不阻止事件冒泡（非列表项，是内联元素），点击区域小
+
+  R03  resource/detail 页面对未登录用户加载失败
+       缓解：酒店/餐厅 API 无需认证，不依赖 JWT
+
+
+33. 阻塞项
+────────────────────────────────────────────────────────────────────────────────
+  无。Task-3 可立即实施。
+
+
+34. 最终结论
+────────────────────────────────────────────────────────────────────────────────
+  问题                                            答案
+  ───────────────────────────────────────────────────────────────────
+  Task-1 是否完整？                                是
+  Task-2 是否完整？                                是
+  Task-3 是否可以立即实施？                        是
+  酒店详情 API 当前是否已经存在？                  是 (getHotelDetail)
+  餐厅详情 API 当前是否已经存在？                  是 (getRestaurantDetail)
+  景点是否继续保留独立详情页？                      是
+  酒店和餐厅是否共用一个详情页？                    是 (/pages/resource/detail)
+  通用详情页正式支持哪些类型？                      hotel, restaurant
+  entertainment/shopping_mall 是否留到 Task-4？     是（仅显示提示）
+  是否创建 utils/navigation.ts？                   是
+  navigation.ts 包含哪些函数？                     getResourceDetailUrl, openResourceDetail, isValidResourceId
+  general_activity 如何处理？                      getResourceDetailUrl 返回 null
+  unknown 如何处理？                               getResourceDetailUrl 返回 null
+  是否使用 ViewModel adapter？                     是（轻量，页面内联）
+  是否创建新类型文件？                              否
+  是否修改景点详情页？                              否
+  是否修改城市详情页？                              是（onHotelTap/onRestaurantTap）
+  是否修改计划详情页？                              是（条件点击）
+  收藏评论是否留到 Task-5？                         是
+  Transit 是否留到 Task-6？                         是
+  Task-3 最终涉及哪些文件？                         2 新建 + 4 修改
+  是否可以根据报告生成 Task-3 实施提示词？          是
+
+================================================================================
+  报告完成时间：2026-07-23
+  0 文件修改
+================================================================================

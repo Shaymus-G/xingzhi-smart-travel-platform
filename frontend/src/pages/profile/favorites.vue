@@ -1,156 +1,194 @@
 <script setup lang="ts">
 /**
- * 我的收藏 — 展示已收藏的景点
+ * 我的收藏 — 展示五类资源收藏
  */
 import { ref, onMounted } from 'vue'
 import NavBar from '@/components/NavBar.vue'
-import ScenicCard from '@/components/ScenicCard.vue'
 import EmptyState from '@/components/EmptyState.vue'
-import Loading from '@/components/Loading.vue'
-import { getFavorites } from '@/api/social'
-import { getScenicDetail } from '@/api/travel'
-import { useUserStore } from '@/stores/user'
+import { getFavorites, deleteFavorite } from '@/api/social'
+import { openResourceDetail } from '@/utils/navigation'
+import { getResourceTypeLabel } from '@/types/resource'
+import type { SocialTargetType } from '@/types/resource'
 import type { Favorite } from '@/types/social'
-import type { ScenicSpot } from '@/types/travel'
 
-const userStore = useUserStore()
+// ========== 状态 ==========
 const loading = ref(false)
-const scenicFavorites = ref<Array<{ favorite: Favorite; scenic: ScenicSpot | null }>>([])
+const error = ref<string | null>(null)
+const favorites = ref<Favorite[]>([])
+const deletingIds = ref<Set<number>>(new Set())
 
-async function loadFavorites() {
+// ========== 加载 ==========
+
+onMounted(() => { void loadFavorites() })
+
+async function loadFavorites(): Promise<void> {
   loading.value = true
+  error.value = null
   try {
-    const favs = await getFavorites()
-    // 只处理 scenic_spot 收藏
-    const scenicFavs = favs.filter(f => f.target_type === 'scenic_spot')
-
-    // 并行获取每个收藏的景点详情
-    const items = await Promise.all(
-      scenicFavs.map(async (fav) => {
-        try {
-          const scenic = await getScenicDetail(fav.target_id)
-          return { favorite: fav, scenic }
-        } catch {
-          return { favorite: fav, scenic: null }
-        }
-      })
-    )
-    scenicFavorites.value = items
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : '加载失败'
-    uni.showToast({ title: msg, icon: 'none' })
+    favorites.value = await getFavorites({ skip: 0, limit: 100 }) || []
+  } catch (err: unknown) {
+    error.value = err instanceof Error ? err.message : '加载失败'
   } finally {
     loading.value = false
   }
 }
 
-function goScenicDetail(id: number) {
-  uni.navigateTo({ url: `/pages/scenic/detail?id=${id}` })
-}
+// ========== 删除 ==========
 
-function goLogin() {
-  uni.navigateTo({ url: '/pages/auth/login' })
-}
+async function handleDelete(fav: Favorite): Promise<void> {
+  if (deletingIds.value.has(fav.id)) return
+  const modalRes = await uni.showModal({ title: '取消收藏', content: '确定取消收藏？', confirmText: '确定', confirmColor: '#d93025' })
+  if (!modalRes.confirm) return
 
-onMounted(() => {
-  if (userStore.isLoggedIn) {
-    loadFavorites()
+  const s = new Set(deletingIds.value); s.add(fav.id); deletingIds.value = s
+  try {
+    await deleteFavorite(fav.id)
+    favorites.value = favorites.value.filter(f => f.id !== fav.id)
+  } catch (err: unknown) {
+    uni.showToast({ title: err instanceof Error ? err.message : '取消失败', icon: 'none' })
+  } finally {
+    const s2 = new Set(deletingIds.value); s2.delete(fav.id); deletingIds.value = s2
   }
-})
+}
+
+// ========== 导航 ==========
+
+function canNavigate(fav: Favorite): boolean {
+  return typeof fav.target_type === 'string' && typeof fav.target_id === 'number' && fav.target_id > 0
+}
+
+function goDetail(fav: Favorite): void {
+  if (canNavigate(fav)) {
+    openResourceDetail(fav.target_type as SocialTargetType, fav.target_id)
+  }
+}
+
+function formatDate(d: string | undefined): string {
+  return d ? d.slice(0, 10) : ''
+}
 </script>
 
 <template>
   <view class="favorites-page">
     <NavBar title="我的收藏" :show-back="true" />
 
-    <!-- 未登录 -->
-    <template v-if="!userStore.isLoggedIn">
-      <EmptyState text="请先登录" sub-text="登录后查看收藏的景点" />
-      <view class="favorites-login-wrap">
-        <button class="favorites-login-btn" @tap="goLogin">去登录</button>
-      </view>
-    </template>
+    <view v-if="loading" class="fav-status"><text>加载中...</text></view>
 
-    <!-- 已登录 -->
-    <template v-else>
-      <Loading :visible="loading" />
+    <view v-else-if="error" class="fav-status fav-error">
+      <text>{{ error }}</text>
+      <view class="fav-retry" @tap="loadFavorites()"><text>重试</text></view>
+    </view>
 
-      <scroll-view
-        v-if="!loading"
-        class="favorites-scroll"
-        scroll-y
-        enhanced
-        :show-scrollbar="false"
+    <EmptyState v-else-if="favorites.length === 0" text="暂无收藏" />
+
+    <scroll-view v-else class="fav-list" scroll-y>
+      <view
+        v-for="fav in favorites"
+        :key="fav.id"
+        class="fav-card"
+        @tap="goDetail(fav)"
       >
-        <EmptyState
-          v-if="scenicFavorites.length === 0"
-          text="暂无收藏"
-          sub-text="去发现喜欢的景点吧"
-        />
-
-        <view v-for="item in scenicFavorites" :key="item.favorite.id" class="favorites-card-wrap">
-          <ScenicCard
-            v-if="item.scenic"
-            :scenic-id="item.scenic.id"
-            :name="item.scenic.name"
-            :image-url="item.scenic.image_url"
-            :score="item.scenic.score"
-            :price="item.scenic.price"
-            :category="item.scenic.category"
-            :address="item.scenic.address"
-            @click="goScenicDetail"
-          />
-          <view v-else class="favorites-card-fallback">
-            <text class="favorites-fallback-text">景点信息加载失败</text>
+        <view class="fav-card-body">
+          <view class="fav-card-header">
+            <text class="fav-type-tag">{{ getResourceTypeLabel(fav.target_type as SocialTargetType, fav.target_type) }}</text>
+            <text class="fav-id">#{{ fav.target_id }}</text>
           </view>
+          <text class="fav-date">{{ formatDate(fav.created_at) }}</text>
         </view>
-
-        <view style="height: 40rpx;" />
-      </scroll-view>
-    </template>
+        <view
+          class="fav-delete"
+          :class="{ deleting: deletingIds.has(fav.id) }"
+          @tap.stop="handleDelete(fav)"
+        >
+          <text>{{ deletingIds.has(fav.id) ? '...' : '取消' }}</text>
+        </view>
+      </view>
+    </scroll-view>
   </view>
 </template>
 
 <style lang="scss" scoped>
 .favorites-page {
-  height: 100vh;
-  display: flex;
-  flex-direction: column;
+  min-height: 100vh;
   background: #f5f5f5;
 }
 
-.favorites-scroll {
-  flex: 1;
-}
-
-.favorites-card-wrap {
-  padding: 0 32rpx;
-  margin-top: 8rpx;
-}
-
-.favorites-card-fallback {
-  background: #fff;
-  border-radius: 16rpx;
-  padding: 80rpx 32rpx;
-  text-align: center;
-}
-
-.favorites-fallback-text {
+.fav-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 200rpx;
   font-size: 28rpx;
   color: #999;
 }
 
-.favorites-login-wrap {
-  display: flex;
-  justify-content: center;
-  margin-top: 24rpx;
+.fav-error {
+  color: #d93025;
 }
 
-.favorites-login-btn {
-  background: #4A90D9;
-  color: #fff;
-  font-size: 28rpx;
-  padding: 12rpx 48rpx;
-  border-radius: 32rpx;
+.fav-retry {
+  margin-top: 16rpx;
+  padding: 10rpx 36rpx;
+  border: 1px solid #4A90D9;
+  border-radius: 24rpx;
+  font-size: 26rpx;
+  color: #4A90D9;
+}
+
+.fav-list {
+  padding: 16rpx 32rpx;
+}
+
+.fav-card {
+  background: #fff;
+  border-radius: 16rpx;
+  padding: 24rpx;
+  margin-bottom: 16rpx;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.fav-card-body {
+  flex: 1;
+}
+
+.fav-card-header {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  margin-bottom: 8rpx;
+}
+
+.fav-type-tag {
+  padding: 4rpx 14rpx;
+  background: #e8f0fe;
+  color: #4A90D9;
+  border-radius: 8rpx;
+  font-size: 24rpx;
+}
+
+.fav-id {
+  font-size: 24rpx;
+  color: #bbb;
+}
+
+.fav-date {
+  font-size: 24rpx;
+  color: #bbb;
+}
+
+.fav-delete {
+  padding: 8rpx 20rpx;
+  border: 1px solid #d93025;
+  border-radius: 24rpx;
+  font-size: 22rpx;
+  color: #d93025;
+}
+
+.fav-delete.deleting {
+  opacity: 0.5;
+  border-color: #ccc;
+  color: #ccc;
 }
 </style>

@@ -1,0 +1,1067 @@
+================================================================================
+  Task-1：领域类型体系与 PlanJSON 适配层 — 实施前专项审查
+  日期：2026-07-23
+  分支：feat/HBuilderX-to-CLI (4c3154d)
+================================================================================
+
+1. 审查基线
+────────────────────────────────────────────────────────────────────────────────
+分支              feat/HBuilderX-to-CLI
+Commit            4c3154d (等于基线)
+Git 状态          干净（仅 1 个 untracked 文档）
+npm run type-check        ✅ 零错误
+npm run build:h5          ✅ DONE Build complete
+npm run build:mp-weixin   ✅ DONE Build complete
+
+结论：代码基线稳定，可以进入 Task-1 预实施阶段。
+
+
+2. 当前前端类型清单
+────────────────────────────────────────────────────────────────────────────────
+文件              导出类型                          语义层          被引用方
+────────────────────────────────────────────────────────────────────────────
+types/ai.ts       AIChatRequest                      API请求         api/ai.ts
+                  AIChatResponse                     API响应         api/ai.ts
+                  AISessionResponse                  API响应         api/ai.ts, pages/ai/chat.vue
+                  ChatMessage                        前端展示        pages/ai/chat.vue
+                  PlanGenerateRequest               API请求         api/ai.ts, pages/plan/generate.vue
+types/travel.ts   City                              API实体         api/travel.ts, pages/home, pages/city/detail
+                  ScenicSpot                        API实体         api/travel.ts, pages/home, pages/city/detail, pages/scenic/detail
+                  Hotel                             API实体         api/travel.ts, pages/city/detail
+                  Restaurant                        API实体         api/travel.ts, pages/city/detail
+                  TravelPlan                        API实体+记录    api/travel.ts, api/ai.ts, pages/plan/detail, pages/plan/list
+types/social.ts   TargetType (=3类)                 社交类型         api/social.ts, pages/scenic/detail, pages/profile/favorites
+                  Favorite                          API实体         api/social.ts, pages/scenic/detail
+                  CreateFavoriteParams              API请求         api/social.ts
+                  Review                            API实体         api/social.ts, pages/scenic/detail
+                  CreateReviewParams                API请求         api/social.ts
+                  UpdateReviewParams                API请求         api/social.ts (未使用)
+                  ReviewUser                        API实体         未直接使用
+types/common.ts   APIResponse<T>                    通用             api/request.ts
+                  PaginationParams                  通用             未使用
+                  PaginatedData<T>                  通用             未使用
+types/user.ts     User, LoginParams, RegisterParams  用户             api/user.ts, stores/user.ts
+
+
+3. 当前 Plan 详情数据通路
+────────────────────────────────────────────────────────────────────────────────
+
+  步骤 1: 获取 plan ID
+    detail.vue:74-77
+    → getCurrentPages() → currentPage.options.id → planId = Number(id) || 0
+    类型：const planId = ref(0)（number）
+    风险：getCurrentPages() 返回值做 as any，无类型安全
+
+  步骤 2: 调用详情 API
+    detail.vue:80
+    → plan.value = await getPlanDetail(planId.value)
+    → api/travel.ts:93: function getPlanDetail(id): Promise<TravelPlan>
+    → GET /api/travel/plans/:id → response {code:0, data: TravelPlanResponse}
+    → request() 自动解包 data 字段
+
+  步骤 3: 接收 TravelPlan 响应
+    types/travel.ts:74:
+      interface TravelPlan {
+        id: number; user_id: number; title: string; destination: string;
+        days: number; budget: number | string | null;
+        plan_json: Record<string, unknown> | null;
+        markdown: string | null;
+        created_at: string; updated_at: string;
+      }
+
+  步骤 4: 读取 plan_json（类型断言）
+    detail.vue:81:
+      planJson.value = plan.value.plan_json as PlanJson | null
+      使用 as 强制类型断言，无运行时校验
+      PlanJson 是页面内联 interface（detail.vue:10-30）
+
+  步骤 5: 模板渲染
+    - 标题：planJson.title || plan.title
+    - destination：plan.destination（字符串字段，非 plan_json 内）
+    - days：plan.days（数据库字段，非 plan_json 内）
+    - travelers：planJson.travelers
+    - budget：plan.budget（数据库字段）
+    - 预估费用：planJson.budget?.estimated_total
+    - 行程：planJson.itinerary（逐日逐项渲染）
+    - 预算明细：planJson.budget?.breakdown
+    - tips / assumptions：planJson.tips / planJson.assumptions
+
+  关键事实：
+    - 页面同时使用 plan（数据库记录）和 planJson（AI JSON）
+    - destination 来自 plan.destination（字符串），不来自 plan_json.destination
+    - days/budget 来自数据库字段
+    - planJson 只在 plan && planJson 非空时渲染
+    - plan_json 为 null 时：显示"计划加载失败"（因为 planJson 为 null 走 else-if 分支）
+    - markdown：完全未使用（虽然数据库字段存在）
+
+
+4. 当前页面真实使用字段
+────────────────────────────────────────────────────────────────────────────────
+
+  4.1 来自 plan (TravelPlan 数据库记录)
+    字段              使用位置                  使用方式
+    ─────────────────────────────────────────────────────
+    id                未在模板中使用            (仅 onMounted 日志)
+    user_id           未使用
+    title             模板 line 128             plan.title 作为 planJson.title 降级
+    destination       模板 line 134            直接显示字符串
+    days              模板 line 138            直接显示数字
+    budget            模板 line 144-146         显示 ¥ 前缀
+    plan_json         代码 line 81              as PlanJson 断言
+    markdown          完全未使用                —
+    created_at        未使用                    —
+    updated_at        未使用                    —
+
+  4.2 来自 plan_json (内联 PlanJson)
+    路径                                模板使用
+    ─────────────────────────────────────────────────────
+    .title                              标题（优先于 plan.title）
+    .destination                        未使用（使用 plan.destination 字符串）
+    .days                               未使用（使用 plan.days）
+    .travelers                          条件显示（>1 时显示人数）
+    .summary                            条件显示
+    .budget.estimated_total             高亮显示预估总额
+    .budget.requested_total             未使用
+    .budget.breakdown.tickets           预算明细行
+    .budget.breakdown.food              预算明细行
+    .budget.breakdown.lodging           预算明细行
+    .budget.breakdown.transport         预算明细行
+    .budget.breakdown.other             预算明细行
+    .itinerary[].day                    第N天标签
+    .itinerary[].theme                  主题标签
+    .itinerary[].summary                日总结
+    .itinerary[].weather_note           天气备注
+    .itinerary[].items[].period         未在模板显示（仅用作 timeline-dot class）
+    .itinerary[].items[].resource_type  timeline-dot class + RTYPE_LABELS 映射
+    .itinerary[].items[].resource_id    未使用
+    .itinerary[].items[].name           项目名称
+    .itinerary[].items[].start_time     时间范围
+    .itinerary[].items[].end_time       时间范围
+    .itinerary[].items[].address        地址
+    .itinerary[].items[].duration_minutes 时长
+    .itinerary[].items[].estimated_cost 费用
+    .itinerary[].items[].reason         选择原因
+    .itinerary[].items[].transport_to_next 交通建议
+    .itinerary[].meals[].period         用餐时段（映射中文）
+    .itinerary[].meals[].name           餐厅名称
+    .itinerary[].meals[].estimated_cost 费用
+    .itinerary[].hotel.name             酒店名称
+    .itinerary[].hotel.address          酒店地址
+    .itinerary[].hotel.estimated_cost   酒店费用
+    .itinerary[].daily_estimated_cost   当日总费用
+    .tips                               逐条显示
+    .assumptions                        逐条显示
+
+  未使用但内联接口已声明：
+    - PlanJson.destination（使用 plan.destination 字符串替代）
+    - PlanJson.days（使用 plan.days）
+    - PlanJson.schema_version（完全未声明）
+    - ItemJson.resource_id（未渲染，但 CSS 使用 resource_type class）
+    - budget.requested_total
+
+  前端当前完全未使用但后端 AI Schema 存在的字段：
+    - schema_version
+    - budget.currency
+    - PlanDestination.city_id（使用 plan.destination 字符串，丢失结构）
+
+
+5. 后端 TravelPlan 字段契约
+────────────────────────────────────────────────────────────────────────────────
+
+  来源：backend/app/models/travel_plan.py, backend/app/schemas/travel.py
+
+  字段          后端 Model 类型          后端 Schema 类型           前端类型                    差异
+  ─────────────────────────────────────────────────────────────────────────────────────────────
+  id            int (PK auto)           int                       number                      ✅ 一致
+  user_id       int (FK)                int                       number                      ✅ 一致
+  title         String(200) NOT NULL    str (max_length=200)      string                      ✅ 一致
+  destination   String(100) NOT NULL    str (max_length=100)      string                      ✅ 一致
+  days          Integer NOT NULL        int (ge=1)                number                      ✅ 一致
+  budget        DECIMAL(12,2) NULL      Optional[float] (ge=0)    number | string | null      ⚠️ 前端多 string
+  plan_json     JSON NULL               Optional[Any]             Record<string,unknown>|null  ⚠️ 后端为 Any
+  markdown      Text NULL               Optional[str]             string | null               ✅ 一致
+  created_at    DateTime NOT NULL       datetime                  string                      ⚠️ 前端 string 而非 Date
+  updated_at    DateTime NOT NULL       datetime (同)             string                      ⚠️ 同上
+
+  关键确认：
+    - 后端 plan_json 类型是 Optional[Any]，通过 model_dump() 保存 → 输出为 dict
+    - AI Service 在 ai_plan_service.py:297 调用 final_plan.model_dump() 保存
+    - plan_json 不会以 JSON 字符串形式存入数据库（使用 SQLAlchemy JSON 列类型）
+    - 历史数据可能包含 null（旧计划无 plan_json）
+    - destination 在数据库中为纯字符串（非 JSON 对象）
+    - budget DECIMAL 在 JSON 序列化时可能为 string 或 number（取决于序列化器）
+    - 列表和详情使用同一个 TravelPlanResponse Schema
+    - 后端无 schema_version 校验
+
+
+6. AI PlanJSON 当前真实 Schema
+────────────────────────────────────────────────────────────────────────────────
+
+  来源：ai/xingzhi_ai/plan_schema.py
+
+  对象                  字段                Python 类型             必填   默认值         Validator
+  ────────────────────────────────────────────────────────────────────────────────────────
+  StructuredTravelPlan  schema_version     str (max_length=10)    可选   "1.0"         无
+                        title              str (max=200)          必填   —             min_length=1
+                        destination        PlanDestination        必填   —             —
+                        days               int (ge=1,le=10)       必填   —             —
+                        travelers          int (ge=1,le=20)       可选   1             —
+                        summary            Optional[str] (max=500)可选   None          —
+                        budget             PlanBudget             必填   —             —
+                        itinerary          list[DayPlan] (1-10)   必填   —             len匹配days, 编号自动修正
+                        tips               list[str] (max=10)     可选   []            —
+                        assumptions        list[str] (max=10)     可选   []            —
+  PlanDestination       city_id            int (ge=1)             必填   —             —
+                        name               str (1-100)            必填   —             —
+                        province           str (max=50)           可选   ""            —
+  PlanBudget            currency           str (max=10)           可选   "CNY"         —
+                        requested_total    Optional[float] (ge=0) 可选   None          —
+                        estimated_total    float (ge=0)           可选   0             非负检查
+                        breakdown          BudgetBreakdown        可选   default       —
+  BudgetBreakdown       tickets            float (ge=0)           可选   0             —
+                        food               float (ge=0)           可选   0             —
+                        lodging            float (ge=0)           可选   0             —
+                        transport          float (ge=0)           可选   0             —
+                        other              float (ge=0)           可选   0             —
+  DayPlan               day                int (ge=1)             必填   —             —
+                        theme              str (max=200)          可选   ""            —
+                        summary            Optional[str] (max=500)可选   None          —
+                        weather_note       Optional[str] (max=500)可选   None          —
+                        items              list[ItineraryItem]    可选   []            最大12
+                        meals              list[MealInfo]         可选   []            最大5
+                        hotel              Optional[HotelInfo]    可选   None          —
+                        daily_estimated_cost float (ge=0)         可选   0             —
+  ItineraryItem         period             str                    必填   —             英文5种 + 中文自动转
+                        start_time         Optional[str] (10)     可选   None          —
+                        end_time           Optional[str] (10)     可选   None          —
+                        resource_type      str                    必填   —             4种 + 中文自动转
+                        resource_id        Optional[int] (ge=1)   可选   None          —
+                        name               str (1-200)            必填   —             —
+                        address            Optional[str] (500)    可选   None          —
+                        duration_minutes   Optional[int] (ge=0)   可选   None          —
+                        estimated_cost     float (ge=0)           可选   0             —
+                        reason             Optional[str] (500)    可选   None          —
+                        transport_to_next  Optional[str] (500)    可选   None          —
+  MealInfo              period             str                    必填   —             —
+                        resource_type      str                    可选   "restaurant"  —
+                        resource_id        Optional[int] (ge=1)   可选   None          —
+                        name               str (1-200)            必填   —             —
+                        estimated_cost     float (ge=0)           可选   0             —
+  HotelInfo             resource_type      str                    可选   "hotel"       —
+                        resource_id        Optional[int] (ge=1)   可选   None          —
+                        name               str (1-200)            必填   —             —
+                        address            Optional[str] (500)    可选   None          —
+                        estimated_cost     float (ge=0)           可选   0             —
+
+  当前 VALID_RESOURCE_TYPES: {"scenic_spot", "restaurant", "hotel", "general_activity"}
+  当前 VALID_PERIODS: {"morning", "noon", "afternoon", "evening", "night"}
+  当前 _RESOURCE_TYPE_MAP: 12 条中文映射（仅 4 类资源）
+  当前 schema_version: 默认 "1.0"，未强制校验
+
+  关键确认：
+    ✅ structuredTravelPlan.model_dump() 在保存前调用（ai_plan_service.py:297）
+    ✅ model_dump() 输出纯 dict（字段名与 Python 属性名一致，即 snake_case）
+    ✅ parser 返回 dict（非模型实例），由 Pydantic 验证后转为模型实例
+    ❌ schema_version 默认 "1.0"，后端不会输出 "1.1"
+    ❌ VALID_RESOURCE_TYPES 不含 entertainment/shopping_mall
+    ❌ renderer 不依赖额外字段（纯从 StructuredTravelPlan 生成 Markdown）
+    ✅ resource_id 可为 None
+    ✅ estimated_cost 默认 0（不可为 null）
+    ✅ transport_to_next 可为 None
+    ✅ hotel 可为 None
+    ✅ meals 可为空列表
+    ✅ items 可为空列表
+
+
+7. 前端与后端字段差异
+────────────────────────────────────────────────────────────────────────────────
+  字段               后端 (plan_schema.py)           前端 (detail.vue 内联)       差异
+  ──────────────────────────────────────────────────────────────────────────────
+  schema_version     ✅ str "1.0"                    ❌ 未声明                   前端丢失此字段
+  destination        PlanDestination (对象)           {name?,province?,city_id?}  后端必填，前端全可选
+  budget.currency    str "CNY"                       ❌ 未声明                   前端丢失
+  budget.estimated   float (必填→可选 0)              number | undefined          后端已放宽为可选
+  items[].period     必填 str                        string | undefined          前端宽松
+  items[].resource_type 必填 str (枚举4种)            string | undefined          前端宽松
+  items[].resource_id   Optional[int]                number | null | undefined   前端一致
+  items[].estimated_cost float(ge=0)                 number | undefined          前端一致
+  HotelInfo.resource_type 可选 "hotel"               ❌ 未声明                   前端丢失
+  MealInfo.resource_type  可选 "restaurant"           ❌ 未声明                   前端丢失
+  MealInfo.resource_id    Optional[int]              ❌ 未声明                   前端丢失
+  budget.breakdown  BudgetBreakdown (5字段)          同(5字段)                   一致
+
+  前端多出的字段（内联接口有，后端无）：
+    (无 — 前端内联接口是后端 Schema 的子集)
+
+  后端有但前端未使用的字段：
+    - schema_version
+    - budget.currency
+    - destination.city_id, destination.province（使用 plan.destination 字符串替代）
+    - items[].period 用于 CSS class 但无文本展示
+    - MealInfo.resource_type, MealInfo.resource_id
+    - HotelInfo.resource_type, HotelInfo.resource_id
+
+
+8. 重复类型和内联类型
+────────────────────────────────────────────────────────────────────────────────
+  类型              定义位置                  是否重复      问题
+  ─────────────────────────────────────────────────────────────────────────────
+  TravelPlan        types/travel.ts:74        唯一         承担 API 记录语义
+  PlanJson          pages/plan/detail.vue:10  内联重复      与 AI Schema 不同步
+  DayPlanJson       pages/plan/detail.vue:32  内联重复      同上
+  ItemJson          pages/plan/detail.vue:43  内联重复      同上
+  MealJson          pages/plan/detail.vue:57  内联重复      同上
+  HotelJson         pages/plan/detail.vue:63  内联重复      同上
+  PlanGenerateRequest types/ai.ts:57          唯一         放于 ai.ts，非 plan.ts
+  TargetType        types/social.ts:7         唯一         当前 3 类
+  RTYPE_LABELS      pages/plan/detail.vue:97  硬编码        仅 4 种
+  PERIOD_LABELS     pages/plan/detail.vue:89  硬编码        仅 5 种
+
+  结论：
+    - detail.vue 内联 5 个接口全部是 AI Schema 的不完整副本
+    - 无 Entertainment 或 ShoppingMall 类型（前端任何位置）
+    - 无 TransitMethod 类型
+    - 无 resource_type 联合类型
+    - RTYPE_LABELS 和 PERIOD_LABELS 紧耦合在页面组件中
+
+9. 资源类型字符串分布
+────────────────────────────────────────────────────────────────────────────────
+  文件                          字符串                            建议类型
+  ─────────────────────────────────────────────────────────────────────────────
+  types/social.ts:7              'scenic_spot'|'hotel'|'restaurant'  SocialTargetType(5类)
+  pages/plan/detail.vue:97-102   RTYPE_LABELS 4种                   RESOURCE_TYPE_META
+  pages/plan/detail.vue:410-413  CSS .scenic_spot/.restaurant/      同上
+                                  .hotel/.general_activity
+  pages/plan/detail.vue:47       resource_type?: string             TravelResourceType | 'unknown'
+  pages/scenic/detail.vue:85     'scenic_spot' 硬编码               SocialTargetType
+  pages/scenic/detail.vue:115    'scenic_spot' 硬编码               SocialTargetType
+  pages/scenic/detail.vue:135    'scenic_spot' 硬编码               SocialTargetType
+  pages/profile/favorites.vue:25 'scenic_spot' 硬编码               SocialTargetType
+  api/social.ts:35               target_type: TargetType            SocialTargetType
+
+  决策：
+    1. TravelResourceType 包含 6 类（含 general_activity）
+    2. NavigableResourceType = Exclude<TravelResourceType, 'general_activity'>
+    3. SocialTargetType = NavigableResourceType（5 类）
+    4. TransitEndpointType 不需要单独定义，直接使用 NavigableResourceType
+       → 'TransitEndpointType = NavigableResourceType' 是纯别名，不提供额外类型安全
+       → 但在 TransitRouteRequest 中使用 NavigableResourceType 语义更清晰
+    5. unknown 类型不进入联合类型，normalizer 返回 'unknown' 字面量 + 保留 rawResourceType
+    6. RTYPE_LABELS 迁移到 RESOURCE_TYPE_META
+
+
+10. SocialTargetType 五类扩展影响
+────────────────────────────────────────────────────────────────────────────────
+
+  当前 TargetType = 'scenic_spot' | 'hotel' | 'restaurant'（3 类）
+
+  扩展为 5 类后的影响矩阵：
+
+  文件                        影响                                        处理方式
+  ──────────────────────────────────────────────────────────────────────────────────
+  types/social.ts              TargetType 扩展，Favorite/Review/CreateParams  T1 直接修改
+                               的 target_type 字段自动跟随
+  api/social.ts                getReviews() 的 target_type 参数类型自动跟随   T1 无代码变化
+  pages/scenic/detail.vue      'scenic_spot' 硬编码不受影响                  T1 无变化
+                                但添加收藏时的 target_type 类型自动扩展
+  pages/profile/favorites.vue  filter(f => f.target_type === 'scenic_spot')   T1 无变化
+                                硬编码过滤，扩展类型不破坏现有逻辑
+                                收藏列表可能返回 entertainment/shopping_mall   T5 处理展示
+                                类型的收藏（目前 filter 会过滤掉）
+  components/ReviewItem.vue    接收 Review 类型，target_type 自动扩展          T1 无变化
+
+  有 exhaustive switch 吗？
+    → 无。全项目没有对 TargetType 的 exhaustive switch。
+    → 扩展到 5 类不会产生 TypeScript 编译错误。
+
+  运行时行为变化：
+    - 仅扩展类型联合：无运行时变化
+    - 收藏列表 API 可能返回 entertainment/shopping_mall 类型的收藏
+      → 当前 profiles/favorites.vue 只过滤 scenic_spot，新类型不会被展示
+      → 但不影响现有功能
+    - scenic/detail.vue 的收藏评论仍硬编码 'scenic_spot'，不受影响
+
+  推荐：Task-1 直接扩展 SocialTargetType 为 5 类，不修改页面 UI。
+        UI 适配（收藏列表展示新类型、通用详情页社交按钮）留给 Task-5。
+
+
+11. Entertainment 和 ShoppingMall 实体字段
+────────────────────────────────────────────────────────────────────────────────
+  基于：backend/app/schemas/entertainment.py, backend/app/schemas/shopping_mall.py
+
+  字段             Entertainment            ShoppingMall             前端建议类型
+  ──────────────────────────────────────────────────────────────────────────────
+  id              int ✅                    int ✅                    number
+  city_id         int ✅                    int ✅                    number
+  name            str (max=100) ✅          str (max=100) ✅          string
+  description     Optional[str]            Optional[str]             string | null
+  address         Optional[str] (500)      Optional[str] (500)       string | null
+  category        Optional[str] (50)       Optional[str] (50)        string | null
+  score           Optional[float] (0-5)    Optional[float] (0-5)     number | null
+  price           Optional[float] (ge=0)   Optional[float] (ge=0)    number | null
+  open_time       Optional[str] (100)      Optional[str] (100)       string | null
+  latitude        Optional[float]          Optional[float]            number | null
+  longitude       Optional[float]          Optional[float]            number | null
+  image_url       Optional[str] (500)      Optional[str] (500)       string | null
+
+  推荐策略：
+    - 严格跟随后端 Schema（使用 number 类型，不使用 number | string）
+    - 理由：后端使用 Pydantic 验证 + from_attributes=True，
+            MySQL DECIMAL 被 SQLAlchemy 转为 Python float，
+            Pydantic 序列化为 JSON number。
+    - 例外：如果测试发现渲染后端返回字符串数字，再扩展为 number | string。
+    - Task-1 新建两个接口应该添加到 types/travel.ts
+    - 不会产生未使用警告：types 文件中的导出即使当前无引用也不会报错
+      （TypeScript 的 noUnusedLocals 只检查局部变量，不检查导出）
+
+
+12. Transit 类型是否纳入 Task-1
+────────────────────────────────────────────────────────────────────────────────
+
+  方案 A：只定义 TransitMethod + TransitRouteRequest，响应留给 Task-6
+  方案 B：完整定义 TransitRoute 联合类型
+  方案 C：全部留给 Task-6
+  ─────────────────────────────────────────────────────────────────────────────
+  推荐：方案 A
+
+  理由：
+    1. TransitMethod 和 TransitRouteRequest 是 NavigableResourceType 的直接消费者，
+       放在 Task-1 有助于验证 NavigableResourceType 的设计正确性
+    2. TransitRouteResponse 结构复杂（4 种方法各有不同字段），
+       且当前无前端调用方，过早定义可能导致与实际响应不一致
+    3. Task-1 的原则是「类型基础设施」，TransitMethod/TransitRouteRequest 属于基础设施
+    4. 响应类型需要 Transit API 实际联调验证后才能最终确定
+    5. 交接文档虽有样例，但属于文档承诺，不如实际 API 响应可靠
+
+  Task-1 创建：
+    types/transit.ts:
+      export type TransitMethod = 'transit' | 'driving' | 'walking' | 'bicycling'
+      export type TransitEndpointType = NavigableResourceType (从 types/resource.ts 导入)
+      export interface TransitRouteRequest {
+        from_type: TransitEndpointType
+        from_id: number
+        to_type: TransitEndpointType
+        to_id: number
+        method: TransitMethod
+        city?: string
+      }
+
+  Task-6 补充：
+    完整的 TransitRoute、TransitSegment、TransitStep 等响应类型
+
+
+13. 资源元数据表设计结论
+────────────────────────────────────────────────────────────────────────────────
+
+  当前草案过于臃肿（apiList, detailRoute, supportsDetail 等混在一个对象中）。
+
+  推荐拆分：
+
+  types/resource.ts:
+    export interface ResourceTypeMeta {
+      type: TravelResourceType
+      label: string            // 中文标签（替代 RTYPE_LABELS）
+      icon?: string            // 可选图标
+    }
+
+    export const RESOURCE_TYPE_META: Record<TravelResourceType, ResourceTypeMeta> = {...}
+
+  ResourceTypeMeta 只包含「纯展示」信息。API URL、路由映射、社交/交通支持等
+  分别放在各自的工具模块中：
+
+    utils/resource-meta.ts   → 引入 types/resource.ts 的 META，不做 API/路由映射
+    utils/navigation.ts      → Task-3，在 Task-1 不创建
+    api/travel.ts            → API URL 继续留在 API 模块本身
+
+  这种拆分避免了：
+    - 元数据表职责过大
+    - general_activity 的 apiList: '' 被误调用
+    - types 文件导入运行时代码
+
+  Task-1 在 types/resource.ts 中创建 RESOURCE_TYPE_META（仅 label 映射），
+  替代 detail.vue 中硬编码的 RTYPE_LABELS 和 PERIOD_LABELS。
+
+
+14. 导航工具是否纳入 Task-1
+────────────────────────────────────────────────────────────────────────────────
+
+  推荐：不纳入 Task-1，移至 Task-3。
+
+  理由：
+    1. getResourceDetailUrl() 返回的 /pages/resource/detail 在 Task-1 不存在
+    2. openResourceDetail() 在当前代码中无调用方（detail.vue 的 resource_id 不可点击）
+    3. Task-1 只做类型基础设施，不接入新页面路由
+    4. 提前创建指向不存在页面的导航工具违反"不修改业务行为"原则
+    5. Task-3 创建通用详情页时同步创建导航工具，职责内聚
+
+  如果 Task-2 的 plan/detail.vue 需要 resource_id 可点击跳转：
+    - 在 Task-2 中内联创建 getResourceDetailUrl()（临时）
+    - 或 Task-3 创建 navigation.ts 后，Task-2 按需引入
+    - 景点跳转 /pages/scenic/detail 直接使用 uni.navigateTo 即可
+
+
+15. 推荐 PlanJSON 类型体系
+────────────────────────────────────────────────────────────────────────────────
+
+  15.1 文件组织
+
+  types/
+  ├── resource.ts   ← TravelResourceType, NavigableResourceType, ResourceTypeMeta (新建)
+  ├── plan.ts       ← 全量 PlanJSON 类型 (新建)
+  ├── travel.ts     ← API 实体 + Entertainment/ShoppingMall (修改)
+  ├── transit.ts    ← TransitMethod, TransitRouteRequest (新建)
+  ├── social.ts     ← TargetType → 5类 (修改)
+  ├── ai.ts         ← PlanGenerateRequest 保留 (不改)
+  ├── user.ts       ← 不改
+  └── common.ts     ← 不改
+
+  15.2 types/resource.ts（新建）
+
+  export type TravelResourceType =
+    | 'scenic_spot' | 'restaurant' | 'hotel'
+    | 'entertainment' | 'shopping_mall'
+    | 'general_activity'
+
+  export type NavigableResourceType = Exclude<TravelResourceType, 'general_activity'>
+
+  export interface ResourceTypeMeta {
+    type: TravelResourceType
+    label: string
+  }
+
+  export const RESOURCE_TYPE_META: Record<TravelResourceType, ResourceTypeMeta> = {
+    scenic_spot:     { type:'scenic_spot',     label:'景点' },
+    restaurant:      { type:'restaurant',      label:'餐厅' },
+    hotel:           { type:'hotel',           label:'酒店' },
+    entertainment:   { type:'entertainment',   label:'娱乐' },
+    shopping_mall:   { type:'shopping_mall',   label:'商场' },
+    general_activity:{ type:'general_activity',label:'活动' },
+  }
+
+  15.3 types/plan.ts（新建 — 完整 PlanJSON 类型）
+
+  第 1 层：AI 原始 Schema（与 backend plan_schema.py 对齐）
+
+  export type PlanSchemaVersion = '1.0' | '1.1' | (string & {})
+  // 使用 (string & {}) 技巧：兼容未来未知版本，但 IDE 自动补全 '1.0' | '1.1'
+
+  export interface PlanDestination {
+    city_id: number
+    name: string
+    province: string
+  }
+
+  export interface PlanBudgetBreakdown {
+    tickets: number
+    food: number
+    lodging: number
+    transport: number
+    other: number
+  }
+
+  export interface PlanBudget {
+    currency: string
+    requested_total: number | null
+    estimated_total: number
+    breakdown: PlanBudgetBreakdown
+  }
+
+  export interface PlanTimelineItem {
+    period: string
+    start_time: string | null
+    end_time: string | null
+    resource_type: string          // 原始字符串，normalize 后才确定是否合法
+    resource_id: number | null
+    name: string
+    address: string | null
+    duration_minutes: number | null
+    estimated_cost: number
+    reason: string | null
+    transport_to_next: string | null
+  }
+
+  export interface PlanMeal {
+    period: string
+    resource_type: string
+    resource_id: number | null
+    name: string
+    estimated_cost: number
+  }
+
+  export interface PlanHotel {
+    resource_type: string
+    resource_id: number | null
+    name: string
+    address: string | null
+    estimated_cost: number
+  }
+
+  export interface PlanDay {
+    day: number
+    theme: string
+    summary: string | null
+    weather_note: string | null
+    items: PlanTimelineItem[]
+    meals: PlanMeal[]
+    hotel: PlanHotel | null
+    daily_estimated_cost: number
+  }
+
+  export interface StructuredTravelPlan {
+    schema_version: PlanSchemaVersion
+    title: string
+    destination: PlanDestination
+    days: number
+    travelers: number
+    summary: string | null
+    budget: PlanBudget
+    itinerary: PlanDay[]
+    tips: string[]
+    assumptions: string[]
+  }
+
+  第 2 层：API 记录
+
+  // types/travel.ts 中修改 TravelPlan 为：
+  export interface TravelPlan {
+    id: number
+    user_id: number
+    title: string
+    destination: string                 // 数据库字符串
+    days: number
+    budget: number | string | null
+    plan_json: StructuredTravelPlan | null  // 替换 Record<string, unknown>
+    markdown: string | null
+    created_at: string
+    updated_at: string
+  }
+
+  第 3 层：标准化安全模型
+
+  // 见 16 节
+
+  15.4 兼容导出策略（关键）
+
+  问题：将 TravelPlan 的 plan_json 从 Record<string, unknown> 改为
+        StructuredTravelPlan | null 是否会破坏现有代码？
+
+  分析：
+    - detail.vue:81: plan.value.plan_json as PlanJson | null
+      → 如果 plan_json 类型变为 StructuredTravelPlan | null，
+         则 as 可以移除，直接用 plan.value.plan_json（但当前仍是内联 PlanJson）
+    - api/ai.ts:35: Promise<TravelPlan>
+      → generatePlan 返回的是新生成的计划，plan_json 非 null
+    - api/travel.ts:88-94: Promise<TravelPlan[]>, Promise<TravelPlan>
+      → 列表和详情 API 均使用 TravelPlan 类型
+    - 所有其他引用方只使用顶层字段（id, title, destination 等），
+      不直接访问 plan_json
+
+  推荐策略：
+    1. 直接在 travel.ts 中修改 TravelPlan，将 plan_json 类型改为
+       StructuredTravelPlan | null
+    2. 不创建兼容别名（因为大部分引用方不访问 plan_json）
+    3. detail.vue 移除内联接口后，直接使用 StructuredTravelPlan 类型
+    4. 如果编译出现错误，逐个文件修复（影响范围很小：
+       只有 api/ai.ts 和 api/travel.ts 使用了 TravelPlan 类型）
+    5. 暂时不重命名 TravelPlan → 保持现有 API 函数签名不变
+
+
+16. 推荐 Normalized 类型体系
+────────────────────────────────────────────────────────────────────────────────
+
+  推荐：方案 A — NormalizedTravelPlan 仅表示规范化后的 plan_json
+
+  理由：
+    - 数据库记录（id, title, destination, days 等）不需要 normalize
+    - normalizeStructuredTravelPlan 的输入是 plan_json 原始数据
+    - 方案 B 把两件事混在一起，职责不清
+
+  类型设计：
+
+  // types/plan.ts
+
+  export interface NormalizedTravelPlan {
+    /** 规范化后的结构化计划（plan_json 解析并填充默认值后的结果） */
+    plan: StructuredTravelPlan
+    /** 规范化过程中产生的非致命警告 */
+    warnings: NormalizeWarning[]
+    /** 原始 plan_json（调试用，生产环境可通过构建工具移除） */
+    _raw: unknown
+  }
+
+  export interface NormalizeWarning {
+    /** 字段路径，如 "itinerary[0].items[2].resource_type" */
+    path: string
+    /** 警告代码，如 "UNKNOWN_RESOURCE_TYPE" */
+    code: string
+    /** 人类可读描述 */
+    message: string
+    /** 原始值（可选，供调试） */
+    rawValue?: unknown
+  }
+
+  命名约定：
+    - normalizeTravelPlanRecord(plan: TravelPlan): { record: TravelPlan; normalizedPlan: NormalizedTravelPlan | null }
+      输入：数据库记录（含 plan_json）
+      输出：原始记录 + 规范化后的 plan_json（如 plan_json 为 null 则 normalizedPlan 为 null）
+
+    - normalizeStructuredPlan(raw: unknown): NormalizedTravelPlan | null
+      输入：plan_json 的原始值
+      输出：规范化结果（含 _warnings, _raw）
+
+  使用方式（detail.vue 替换后）：
+    const result = normalizeTravelPlanRecord(plan)
+    if (result.normalizedPlan) {
+      // 使用 result.normalizedPlan.plan（StructuredTravelPlan）
+      // 查看 result.normalizedPlan.warnings
+    } else {
+      // plan_json 为 null，回退到 markdown
+    }
+
+
+17. Normalizer 函数职责
+────────────────────────────────────────────────────────────────────────────────
+
+  函数                                  输入                    输出                    默认值策略
+  ──────────────────────────────────────────────────────────────────────────────────────
+  normalizeStructuredPlan(raw)          unknown                  NormalizedTravelPlan|null  —（顶层）
+  normalizePlanDestination(raw)         unknown                  PlanDestination          缺失字段填默认值
+  normalizePlanBudget(raw)              unknown                  PlanBudget               同上
+  normalizePlanDay(raw)                 unknown                  PlanDay                  同上
+  normalizePlanTimelineItem(raw)        unknown                  PlanTimelineItem         同上
+  normalizePlanMeal(raw)                unknown                  PlanMeal                 同上
+  normalizePlanHotel(raw)               unknown                  PlanHotel                同上
+  validateResourceType(v)               string|undefined         TravelResourceType|'unknown' —
+  normalizeCost(v)                      unknown                  number                   非法→0+warning
+  normalizeNullableNumber(v)            unknown                  number|null              非法→null+warning
+  normalizeStringArray(v)               unknown                  string[]                 非法→[]+warning
+
+  每个子 normalizer 返回标准化对象，副作用是向 warnings[] 追加警告。
+
+
+18. Normalizer 默认值策略
+────────────────────────────────────────────────────────────────────────────────
+
+  场景                          默认值            理由
+  ───────────────────────────────────────────────────────────────────────
+  plan_json 为 null             返回 null        null = 无结构化数据，页面回退 markdown
+  plan_json 为 JSON 字符串      解析后 normalize 先尝试修复
+  plan_json 为非法字符串        返回 null+warn  无法恢复
+  destination 为字符串          包装为对象       兼容旧数据：{city_id:0,name:dest,province:''}
+  budget 为字符串               parseFloat      兼容 DECIMAL 序列化为字符串
+  budget 解析失败               0 + warning      不阻塞渲染
+  resource_type 缺失/未知       'unknown'+warn   保留原始值在 _raw 中
+  resource_id 为 null/undefined null             null 明确表示无 ID（不使用 0）
+  resource_id 为非正数          null + warning   同上
+  estimated_cost 为负           0 + warning      非法值重置
+  estimated_cost 为 null        0                符合后端默认值
+  itinerary 缺失                [] + warning     空行程
+  days 缺失                     从 itinerary.length 推断+warn  尽力修复
+  items 缺失                    []               空活动列表
+  meals 缺失                    []               空用餐列表
+  hotel 缺失                    null              无住宿
+
+  关键决策：
+    1. resource_id 无效时使用 null，不使用 0
+       理由：null 明确表示"无关联资源"，0 可能被误认为有效 ID。
+       页面在渲染时检查 resource_id !== null 决定是否生成详情链接。
+    2. estimated_cost 缺失/非法填 0（符合后端 Schema 默认值）
+       UI 通过 fmtCost(0) → "免费" 展示。
+       如果 product 需要区分"未知"和"免费"，
+       应使用 null → fmtCost(null) → "--"。
+       当前 fmtCost 已经处理 undefined/null → "--"。
+       建议 normalizer 保留 null 而非转为 0，
+       使 UI 能区分"AI 未估算费用"和"免费"。
+    3. destination.city_id 缺失时填 0
+       理由：兼容旧数据（后端 destination 是字符串）。
+       但 city_id:0 不会被误用于 API（前端不拿它查询城市详情）。
+    4. 保留 _raw：
+       只保留顶层 plan_json 原始值（一个引用），不递归复制。
+       开发环境通过 warnings 调试，生产环境 _raw 仍存在但体积可接受。
+       （一个 PlanJSON 约 10-50KB，保留一个引用不增加显著内存压力）
+
+
+19. Normalizer 错误与 Warning 模型
+────────────────────────────────────────────────────────────────────────────────
+
+  推荐：方案 A — 直接返回 NormalizedTravelPlan | null，warnings 放在内部
+
+  理由：
+    - 大部分字段损坏不阻塞页面渲染（前端可以降级展示）
+    - Result 模式增加调用方负担（每次都要 if (!result.ok)）
+    - 抛异常过于粗暴（一个字段问题导致整个计划不可见）
+    - 当前项目规模不需要 Result 的形式化约束
+    - 如果未来需要更严格的错误处理，可以在 NormalizedTravelPlan 中增加 fatalError 字段
+
+  结构化 Warning：
+    ✅ 使用 NormalizeWarning { path, code, message, rawValue? }
+    不使用自由字符串数组。
+
+    理由：
+      - path 方便定位问题字段
+      - code 支持程序化处理（如 "UNKNOWN_RESOURCE_TYPE" 可统计）
+      - 便于单元测试断言具体 warning
+
+
+20. schema_version 兼容方案
+────────────────────────────────────────────────────────────────────────────────
+
+  推荐方案：
+
+  export type PlanSchemaVersion = '1.0' | '1.1' | (string & {})
+
+  规则：
+    1. TypeScript 层面不限制版本号（(string & {}) 允许任意字符串）
+    2. IDE 自动补全优先显示 '1.0' 和 '1.1'
+    3. normalizer 中：
+       - 识别 '1.0'：使用 4 种 resource_type 验证（向后兼容）
+       - 识别 '1.1'：使用 6 种 resource_type 验证（向前兼容，即使后端尚未输出）
+       - 未知版本：标记 warning，但继续以最新已知规则渲染
+    4. 缺失 schema_version 时默认 '1.0'（当前后端行为）
+
+  Task-1 职责：
+    - 前端声明 1.1 类型并为 1.1 做读取兼容
+    - normalizer 同时支持 1.0 和 1.1 资源类型验证
+    - 不修改后端 AI Schema（属于 Task-7）
+
+  Task-7 职责：
+    - 后端 AI Schema 升级到 1.1
+    - VALID_RESOURCE_TYPES 扩展
+    - 中文映射扩展
+
+
+21. Import 依赖方向
+────────────────────────────────────────────────────────────────────────────────
+
+  推荐方向图：
+
+  types/resource.ts       (零依赖，最底层)
+      ↓
+  types/plan.ts           (导入 resource.ts 的 TravelResourceType)
+  types/social.ts         (导入 resource.ts 的 NavigableResourceType → SocialTargetType)
+  types/transit.ts        (导入 resource.ts 的 NavigableResourceType)
+      ↓
+  types/travel.ts         (导入 plan.ts 的 StructuredTravelPlan)
+      ↓
+  utils/plan-normalizer.ts (导入 plan.ts + resource.ts)
+  utils/resource-meta.ts   (导入 resource.ts 的 RESOURCE_TYPE_META)
+      ↓
+  api/*.ts                 (导入 types/*.ts)
+      ↓
+  pages/*.vue              (导入 types/*.ts + utils/*.ts)
+
+  无循环依赖风险：
+    - types/ 文件之间只有单向依赖（resource → plan/social/transit → travel）
+    - plan.ts 不依赖 travel.ts（StructuredTravelPlan 是独立定义）
+    - travel.ts 依赖 plan.ts（引用 StructuredTravelPlan 作为 plan_json 类型）
+    - utils 不反向被 types 导入
+    - types 不导入运行时代码
+
+  现有 import 兼容：
+    - types/travel.ts 中的 TravelPlan, City, ScenicSpot, Hotel, Restaurant 类型名不变
+    - types/social.ts 中的 TargetType, Favorite, Review 等类型名不变
+    - types/ai.ts 中的 PlanGenerateRequest 保留
+    - api/travel.ts 的 import 路径不变（仍是 @/types/travel）
+    - 新增的 Entertainment/ShoppingMall 导出到 types/travel.ts
+
+
+22. 页面行为影响
+────────────────────────────────────────────────────────────────────────────────
+
+  修改 pages/plan/detail.vue 时的行为变化：
+
+  变化                    当前行为                        修改后                        影响
+  ──────────────────────────────────────────────────────────────────────────────────────────
+  import                  导入 TravelPlan                  增加导入 normalizer + 类型      无运行时影响
+  内联接口                5 个 interface                   全部删除                       类型检查从本地→共享
+  planJson 类型            ref<PlanJson|null>              ref<NormalizedTravelPlan|null>  类型收紧
+  赋值                    as PlanJson                      normalizeStructuredPlan()       有运行时校验
+  planJson.title          planJson.title || plan.title     result.plan.title                同值（normalizer 不改变合法值）
+  PERIOD_LABELS           页面内 Record                    导入 RESOURCE_TYPE_META          同值
+  RTYPE_LABELS            页面内 Record                    导入 RESOURCE_TYPE_META          同值
+  未知 resource_type      显示原始字符串                   显示 '活动'（兜底标签）          稍有变化：从未知字符串→兜底标签
+  fmtCost / fmtNum        保留                             保留                            不变
+  plan_json 为 null       显示"加载失败"                    显示 markdown 降级              有意的安全修复
+  plan_json 为非法字符串   as 断言可能崩溃                 返回 null + markdown 降级        有意的安全修复
+  resource_id 为 0        正常渲染（不可点击）              同（normalizer 保留 null）       无变化
+
+  列为「有意的安全修复」的变化：
+    1. plan_json 为非法值时不再崩溃，回退到 markdown
+    2. plan_json 为 null 时显示 markdown 降级（而非"加载失败"）
+    3. 未知 resource_type 显示兜底标签而非英文原始字符串
+
+  这些修复虽然改变了异常数据的行为，但属于提高健壮性的正向变化。
+
+
+23. 测试策略
+────────────────────────────────────────────────────────────────────────────────
+
+  当前项目无前端测试框架（无 Vitest/Jest/__tests__/test script）。
+
+  不允许 Task-1 安装新依赖。
+
+  最小测试方式：
+    1. type-check：确保所有类型导入正确，无循环依赖
+    2. H5 构建：确保所有类型文件被正确打包
+    3. mp-weixin 构建：确保平台兼容
+    4. 手动验证脚本（可选）：在 frontend 目录创建临时 TypeScript 文件，
+       导入 normalizer 并使用 console.log 验证样例数据。
+       验证后删除临时文件。
+
+  推荐测试用例（设计，不创建文件）：
+
+  TC01  正常 1.0 对象            → 返回 NormalizedTravelPlan, warnings=[]
+  TC02  plan_json 为 null        → 返回 null
+  TC03  plan_json 为 JSON 字符串 → 解析成功, warnings=[]
+  TC04  非法 JSON 字符串          → 返回 null, warnings 含 PARSE_ERROR
+  TC05  destination 为字符串      → PlanDestination {city_id:0, name, province:''}
+  TC06  budget 为字符串 "3000"    → budget.estimated_total = 3000
+  TC07  resource_type 未知 "foo"  → validateResourceType 返回 'unknown'
+  TC08  resource_id 缺失          → null + warning
+  TC09  itinerary 缺失            → [] + warning
+  TC10  负数 estimated_cost       → 0 + warning
+  TC11  markdown 降级              → plan_json null 时页面回退 markdown
+  TC12  1.1 entertainment         → 识别为合法 resource_type (即使后端尚未输出)
+  TC13  1.1 shopping_mall         → 同上
+  TC14  general_activity          → 识别为合法 resource_type
+  TC15  未知 schema_version "2.0" → 继续渲染 + warning
+  TC16  schema_version 缺失       → 默认 "1.0", 继续渲染
+
+
+24. Task-1 最终文件范围
+────────────────────────────────────────────────────────────────────────────────
+
+  经过审查，最终确定的 Task-1 文件清单：
+
+  新建文件 (3个)：
+    1. types/resource.ts        — TravelResourceType, NavigableResourceType, ResourceTypeMeta
+    2. types/plan.ts             — 全量 PlanJSON 类型 + NormalizedTravelPlan + NormalizeWarning
+    3. utils/plan-normalizer.ts  — normalizeStructuredPlan + 子 normalizer 函数
+    4. types/transit.ts          — TransitMethod, TransitEndpointType, TransitRouteRequest
+
+  修改文件 (4个)：
+    5. types/social.ts           — TargetType 从 3 类扩展到 5 类
+    6. types/travel.ts           — 增加 Entertainment, ShoppingMall 类型
+                                   — TravelPlan.plan_json: Record<string,unknown> → StructuredTravelPlan|null
+    7. pages/plan/detail.vue     — 删除内联 5 个接口
+                                   — 导入 normalizer + 类型
+                                   — 替换 as PlanJson 为 normalizeStructuredPlan()
+                                   — RTYPE_LABELS → RESOURCE_TYPE_META
+                                   — PERIOD_LABELS → PERIOD_LABELS（从 utils 导入或保留常量）
+    8. types/ai.ts               — 无结构性变化（PlanGenerateRequest 保留，添加注释引用 plan.ts）
+
+
+25. 明确移出 Task-1 的内容
+────────────────────────────────────────────────────────────────────────────────
+
+  移出内容                          原目标        移入任务        理由
+  ──────────────────────────────────────────────────────────────────────────
+  utils/navigation.ts                Task-1        Task-3          详情页不存在，无调用方
+  utils/resource-meta.ts (完整版)     Task-1        —              拆分：types/resource.ts 只有 label
+  TransitRoute 响应类型               Task-1        Task-6          响应结构需联调验证
+  pages/resource/detail.vue           Task-3        保留            通用详情页
+  pages.json 修改                     Task-3        保留            注册新路由
+  Entertainment/ShoppingMall API封装  Task-4        保留            api/travel.ts 新增函数
+  city/detail.vue 5 Tab               Task-4        保留            城市详情扩展
+  SocialTargetType UI 适配            Task-5        保留            收藏评论按钮
+
+
+26. 实施步骤
+────────────────────────────────────────────────────────────────────────────────
+
+  步骤  操作                                涉及文件                      验证点
+  ──────────────────────────────────────────────────────────────────────────────────
+  1     创建 types/resource.ts              新建                          类型检查
+  2     修改 types/social.ts                TargetType -> 5类           类型检查, 无新编译错误
+  3     创建 types/plan.ts                  完整 PlanJSON 类型           类型检查
+  4     创建 types/transit.ts               TransitMethod 等            类型检查
+  5     修改 types/travel.ts                +Entertainment/ShoppingMall  类型检查
+                                            plan_json 类型更新
+  6     创建 utils/plan-normalizer.ts       normalizer 全家桶            类型检查
+  7     修改 pages/plan/detail.vue          删除内联接口                  类型检查 + H5构建
+                                            接入 normalizer
+                                            替换 RTYPE_LABELS
+  8     运行 npm run type-check             全项目                       零错误
+  9     运行 npm run build:h5               全项目                       构建成功
+  10    运行 npm run build:mp-weixin        全项目                       构建成功
+  11    检查 git diff                       全项目                       只有预期文件变化
+
+
+27. 验收标准
+────────────────────────────────────────────────────────────────────────────────
+  必须满足：
+    1.  vue-tsc --noEmit 零错误
+    2.  H5 构建成功（npm run build:h5）
+    3.  mp-weixin 构建成功（npm run build:mp-weixin）
+    4.  detail.vue 不再包含内联 PlanJson/DayPlanJson/ItemJson/MealJson/HotelJson 接口
+    5.  detail.vue 不再使用 as PlanJson 类型断言
+    6.  detail.vue 使用 normalizeStructuredPlan() 替代直接断言
+    7.  SocialTargetType 为 5 类（scenic_spot|hotel|restaurant|entertainment|shopping_mall）
+    8.  TravelResourceType 为 6 类（含 general_activity）
+    9.  RESOURCE_TYPE_META 包含全部 6 种类型的 label
+    10. 正常计划详情展示不变（与修改前视觉一致）
+    11. 正常 resource_type 标签不变
+    12. 正常费用展示不变
+    13. 无循环依赖（TypeScript 编译不报循环引用错误）
+    14. 无新增 npm 依赖
+    15. package-lock.json 不变
+    16. 不修改后端或 AI 文件
+    17. pages.json 不变
+    18. manifest.json 不变
+
+  建议增加：
+    19. plan_json 为 null 时显示 markdown 降级（而非 "加载失败"）
+    20. 非法 plan_json 不导致白屏
+    21. 未知 resource_type 显示兜底标签（如 "活动"）
+
+
+28. 风险清单
+────────────────────────────────────────────────────────────────────────────────
+  R01  plan_json 类型变化导致 api/travel.ts 编译错误
+       风险：TravelPlan 类型被 api/travel.ts 多处使用
+       缓解：plan_json 改为 StructuredTravelPlan|null 后，
+             不访问 plan_json 的函数（getCities/getScenics 等）不受影响。
+             访问 plan_json 的函数（getPlanDetail, getMyPlans）编译期可立即发现。
+
+  R02  SocialTargetType 扩展到 5 类后 pages/scenic/detail.vue 编译错误
+       风险：硬编码 'scenic_spot' 作为 target_type 值
+       缓解：'scenic_spot' 是 SocialTargetType 的子类型，不会报错。
+
+  R03  StructuredTravelPlan 的所有必填字段都给了默认值，
+       normalizer 填充后不会出现 undefined 访问。
+       缓解：已设计完整默认值策略。
+
+  R04  后端 plan_json 可能不是标准 StructuredTravelPlan
+       风险：历史数据、直接 POST 创建的计划可能有不同结构
+       缓解：normalizer 处理所有异常情况，降级到 markdown。
+
+
+29. 阻塞项
+────────────────────────────────────────────────────────────────────────────────
+  无阻塞项。Task-1 可立即实施。
+
+
+30. 最终结论
+────────────────────────────────────────────────────────────────────────────────
+  问题                                                          答案
+  ─────────────────────────────────────────────────────────────────────────────
+  Task-1 是否可以立即实施？                                      是
+  当前 TravelPlan 类型是否需要拆分？                             是（plan_json 改为 StructuredTravelPlan|null）
+  PlanGenerateRequest 应放在哪个文件？                           types/ai.ts（保持现状，职责清晰）
+  SocialTargetType 是否可以直接扩展到五类？                      是（无编译错误，无运行时破坏）
+  Task-1 是否创建 types/transit.ts？                             是（仅 TransitMethod + TransitRouteRequest）
+  Task-1 是否创建 utils/navigation.ts？                          否（移至 Task-3）
+  Task-1 是否创建完整 RESOURCE_TYPE_META？                       否（仅 label，API URL/路由留在各自模块）
+  normalizer 应返回 Result 还是直接返回对象？                    直接返回 NormalizedTravelPlan|null + 内部 warnings
+  非法数字应使用 0 还是 null？                                   resource_id→null, estimated_cost→null(保留未知语义)
+  未知 resource_type 应如何表达？                                'unknown' 字面量 + rawResourceType 保留
+  _raw 是否应该保留？                                           保留顶层引用（不递归复制）
+  Task-1 是否会改变页面运行行为？                                是，3 处有意的安全修复（见 22 节）
+  schema_version 1.1 是否只做读取兼容？                          是（前端声明并兼容，后端/AI 留给 Task-7）
+  Task-1 最终涉及哪些文件？                                      4 新建 + 4 修改（见 24 节）
+  是否可以根据本报告生成 Task-1 实施提示词？                    是
+
+================================================================================
+  报告完成时间：2026-07-23
+  0 文件修改
+================================================================================

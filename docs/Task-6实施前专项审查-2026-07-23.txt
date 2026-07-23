@@ -1,0 +1,309 @@
+================================================================================
+  Task-6：实时交通路线查询与展示 — 实施前专项审查
+  日期：2026-07-23
+  分支：feat/HBuilderX-to-CLI (4c3154d)
+================================================================================
+
+1. 审查基线
+────────────────────────────────────────────────────────────────────────────────
+分支              feat/HBuilderX-to-CLI
+Commit            4c3154d
+Task-1~5          全部已实现 (11M + 7??)
+type-check        ✅ 零错误
+H5/mp-weixin      ✅ DONE
+
+
+2. Transit 前端类型矩阵
+────────────────────────────────────────────────────────────────────────────────
+文件: types/transit.ts (Task-1 创建, 38行)
+
+类型                      字段                                                状态
+────────────────────────────────────────────────────────────────────────────
+TransitMethod             'transit'|'driving'|'walking'|'bicycling'          ✅ 正确
+TransitEndpointType       NavigableResourceType (= 5类)                      ✅ 正确
+TransitRouteRequest       from_type, from_id, to_type, to_id, method, city?  ✅ 与后端一致
+
+缺失（Task-6 需新增）：
+  TransitRouteCommon       method, distance, duration                           待新增
+  TransitRouteTransit      +cost, walking_distance, segments[]                  待新增
+  TransitRouteDriving      +traffic_lights, toll, steps[]                       待新增
+  TransitRouteWalking      +steps[]                                             待新增
+  TransitRouteBicycling    +steps[]                                             待新增
+  TransitSegment           type, name?, departure?, arrival?, via_stops?, ...   待新增
+  TransitStep              instruction, distance                                待新增
+  TransitRouteResult       = TransitRouteTransit | Driving | Walking | Bicycling 待新增
+
+不需要修改现有 TransitRouteRequest 和 TransitMethod 定义。
+
+
+3. Transit 后端调用链
+────────────────────────────────────────────────────────────────────────────────
+  Frontend: GET /api/transit/route?from_type=scenic_spot&from_id=1&to_type=hotel&to_id=2&method=transit&city=杭州
+    → transit.py: get_route(from_type, from_id, to_type, to_id, method, city)
+    → transit_service.py: get_route()
+      → _get_coords(db, from_type, from_id) → (lng, lat) 从数据库查询
+      → _get_coords(db, to_type, to_id) → (lng, lat)
+      → 根据 method 调用 _call_transit / _call_driving / _call_walking / _call_bicycling
+      → 高德 API: https://restapi.amap.com/v3/direction/{mode}
+      → 解析响应 → dict
+    → response: { code:0, data: {...} }  或  { code:1, message: "error" }
+
+
+4. /api/transit/route 接口契约
+────────────────────────────────────────────────────────────────────────────────
+  GET /api/transit/route
+
+  参数         类型    必填  默认      说明
+  ─────────────────────────────────────────────────────────────────
+  from_type    str     ✅    —         起点资源类型 (5类)
+  from_id      int     ✅    —         起点资源 ID
+  to_type      str     ✅    —         终点资源类型 (5类)
+  to_id        int     ✅    —         终点资源 ID
+  method       str     —     "transit" 出行方式
+  city         str     —     None      城市名 (公交必填)
+
+  认证: 无需登录
+  资源不存在的错误: {"error": "未找到起点/终点资源"}
+  缺少坐标: _get_coords 返回 None → error
+  高德失败: {"error": "路径规划失败: ..."}
+  公交缺city: {"error": "公交模式需要提供 city 参数"}
+
+  关键发现: 前端不需要传经纬度，后端从数据库查询坐标。
+  这意味着无需用户当前位置，无需定位权限。
+
+
+5. /api/transit/between-spots 接口契约
+────────────────────────────────────────────────────────────────────────────────
+  GET /api/transit/between-spots
+
+  参数         类型    必填  默认
+  ─────────────────────────────────────────────────────────────
+  spot_a_id    int     ✅    —
+  spot_b_id    int     ✅    —
+  method       str     —     "transit"
+
+  内部实现: 固定 from_type=to_type="scenic_spot", city 从 spot_a 的城市获取
+  仅支持景点间查询。不适用于其他资源类型组合。
+
+
+6. 四种交通方式响应差异
+────────────────────────────────────────────────────────────────────────────────
+  方法        顶层字段                                     独有字段
+  ─────────────────────────────────────────────────────────────────────────
+  transit     method, distance(米), duration(分钟)          cost(元), walking_distance(米), segments[]
+  driving     method, distance(米), duration(分钟)          traffic_lights, toll(元), steps[5]
+  walking     method, distance(米), duration(分钟)          steps[5]
+  bicycling   method, distance(米), duration(分钟)          steps[5]
+
+  transit segments: { type, name?, departure?, arrival?, via_stops?, distance, duration? }
+  其他 steps: { instruction, distance }
+
+  distance/duration 均为字符串 ("12832 米", "45 分钟")，需前端 parse。
+
+
+7. 当前定位能力
+────────────────────────────────────────────────────────────────────────────────
+  项目当前: 无任何定位使用
+  - uni.getLocation: 0 次调用
+  - navigator.geolocation: 0 次
+  - Android manifest: 无 ACCESS_FINE_LOCATION / ACCESS_COARSE_LOCATION
+  - 微信小程序: 无 scope.userLocation 声明
+  - H5: 无 geolocation API 使用
+
+  结论: 项目完全没有定位能力。
+  引入定位需要: manifest 权限修改 + H5 HTTPS + 小程序审核 + Android 隐私弹窗。
+  且后端 transit API 使用资源 ID 查询坐标，不需要前端传坐标。
+
+
+8. 是否需要当前位置 — 结论
+────────────────────────────────────────────────────────────────────────────────
+  由于:
+    1. 后端 transit API 接受资源 ID(非坐标)，从数据库查询经纬度
+    2. 项目无定位权限配置
+    3. 引入定位需要大量跨端 manifest/权限改动
+
+  决策: Task-6 不需要用户当前位置。
+  路线查询使用后端已有的资源间路由 (/api/transit/route)。
+
+  这意味着:
+    - 详情页无法做"从当前位置到这里"
+    - 但计划详情页的相邻资源路线是自然的应用场景
+
+
+9. 三种实施方案比较
+────────────────────────────────────────────────────────────────────────────────
+  方案 A: 仅计划详情资源间路线（推荐）
+    - 使用 /api/transit/route
+    - 不需要定位权限
+    - 不需要 manifest 修改
+    - 相邻 itinerary item 之间查询
+    - transport_to_next 保持不变
+    范围: api/transit.ts + TransitRoutePanel + plan/detail.vue
+
+  方案 B: 资源详情间路线 + 定位
+    - 需要定位 + manifest 修改
+    - 范围大，权限复杂
+    范围: 方案A + manifest + scenic/detail + resource/detail + 定位流程
+
+  方案 C: 全功能
+    - 需要方案 B 全部 + 计划页 + 城市页
+    - 过度设计
+
+  决策: 方案 A
+  理由:
+    1. 后端 transit API 用资源 ID, 不需要坐标 → 不需要定位
+    2. 计划详情已有相邻资源链 (itinerary items), 天然适配
+    3. 零 manifest 修改, 零权限问题
+    4. 范围最小, 文件最少
+
+
+10. 计划节点建模
+────────────────────────────────────────────────────────────────────────────────
+  方案: 只处理相邻 itinerary items
+
+  规则:
+    1. 取每个 day.itinerary.items[] 中的连续 item
+    2. 当前 item(i) → 下一 item(i+1)
+    3. 两端的 resource_type 必须在五类可导航资源中
+    4. 两端的 resource_id 必须是正整数
+    5. general_activity → 跳过(不作为端点), 也不连接跨越它的两端
+    6. unknown → 跳过
+    7. 最后一项不显示路线入口 (无下一项)
+    8. 不跨天连接
+    9. meal/hotel 不参与 (保持简单, 后续可扩展)
+
+  每个可导航段生成:
+    { originType, originId, originName, destType, destId, destName }
+
+
+11. transport_to_next 边界
+────────────────────────────────────────────────────────────────────────────────
+  保持 AI 静态文本不变:
+    - transport_to_next 继续以 🚗 图标 + 文本 展示
+    - 实时路线入口添加在 transport_to_next 下方或旁边
+    - 两个信息互补，不相互替换
+    - 不修改 normalizer
+    - 不修改 plan_json 写入
+    - 路线结果仅页面级缓存
+
+
+12. Transit API 设计
+────────────────────────────────────────────────────────────────────────────────
+  新建: api/transit.ts
+
+  import { http } from './request'
+  import type { TransitMethod, TransitEndpointType } from '@/types/transit'
+
+  export function getTransitRoute(params: {
+    from_type: TransitEndpointType
+    from_id: number
+    to_type: TransitEndpointType
+    to_id: number
+    method: TransitMethod
+    city?: string
+  }): Promise<TransitRouteResult> {
+    return http.get('/api/transit/route', filterParams(params))
+  }
+
+  不封装 between-spots (仅景点间，使用场景有限)
+
+
+13. TransitRoutePanel 组件设计
+────────────────────────────────────────────────────────────────────────────────
+  新建: components/TransitRoutePanel.vue
+
+  Props:
+    originType: TransitEndpointType
+    originId: number
+    originName: string
+    destType: TransitEndpointType
+    destId: number
+    destName: string
+    city?: string
+    cache?: TransitCache  // 可选外部缓存
+
+  内部:
+    - 方式选择 (transit/driving/walking/bicycling)
+    - 默认不自动请求
+    - 用户点击"查询路线"后请求
+    - loading/error/empty 状态
+    - 成功缓存 (实例内 Map)
+    - 摘要展示: 距离 + 时长 + (费用/换乘)
+    - 步骤列表
+    - 切换方式不清空已有结果(直到新查询)
+
+  不负责: 资源加载, PlanJSON, 社交, 导航
+
+
+14. 页面级缓存
+────────────────────────────────────────────────────────────────────────────────
+  实例内 Map: new Map<string, TransitRouteResult>()
+  Key: `${from_type}:${from_id}-${to_type}:${to_id}-${method}`
+  成功写入, 失败不缓存
+  页面卸载随组件销毁
+  不使用 localStorage/Pinia
+
+
+15. Task-6 最终文件范围
+────────────────────────────────────────────────────────────────────────────────
+  新建 (2):
+    api/transit.ts                    — getTransitRoute
+    components/TransitRoutePanel.vue  — 路线查询+展示
+
+  修改 (2):
+    types/transit.ts                  — 新增响应类型
+    pages/plan/detail.vue             — item间路线入口
+
+  不修改:
+    manifest.json, pages.json, scenic/detail, resource/detail, city/detail
+    types/plan.ts, plan-normalizer.ts, navigation.ts, social.ts
+
+
+16. 实施步骤
+────────────────────────────────────────────────────────────────────────────────
+  1. 扩展 types/transit.ts (响应类型)
+  2. 新建 api/transit.ts
+  3. 新建 TransitRoutePanel.vue
+  4. 修改 plan/detail.vue (item间路线入口)
+  5. type-check + build:h5 + build:mp-weixin
+  6. 检查 diff
+
+
+17. 验收标准
+────────────────────────────────────────────────────────────────────────────────
+    1-3. type-check + 构建通过
+    4-5. Transit 类型/API 正确
+    6-9. 资源端点/方法正确
+    10-14. 按需查询 + 缓存 + 清理
+    15-17. 不修改 transport_to_next / PlanJSON / normalizer
+    18. 无 manifest 修改
+    19. 无定位依赖
+    20. 无新 Store
+
+
+18. 最终结论
+────────────────────────────────────────────────────────────────────────────────
+  问题                                    答案
+  ───────────────────────────────────────────────────────────────
+  Task-1~5 完整？                          是
+  Task-6 可立即实施？                      是
+  types/transit.ts 是否正确？              是 (请求类型); 需新增响应类型
+  /route 参数？                            from_type, from_id, to_type, to_id, method, city?
+  四种方法枚举？                            transit/driving/walking/bicycling
+  是否需要登录？                            否
+  是否需要定位？                            否 (后端查坐标)
+  是否需要修改 manifest？                   否
+  采用方案？                               方案 A (仅计划详情资源间路线)
+  是否创建 api/transit.ts？               是
+  是否创建 TransitRoutePanel？             是
+  景点/通用详情是否接入？                   否 (无定位,且单个资源无自然终点)
+  计划详情是否接入？                        是
+  transport_to_next 是否修改？             否
+  缓存位置？                              组件实例内 Map
+  AMAP_KEY 是否只属于后端？                是
+  Task-6 文件范围？                        2 新建 + 2 修改
+
+================================================================================
+  报告完成时间：2026-07-23
+  0 文件修改
+================================================================================

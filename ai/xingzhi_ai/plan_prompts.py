@@ -5,7 +5,7 @@ from xingzhi_ai.travel_context import build_grounding_rules
 # JSON Schema 示例（精简版，作为 Prompt 中的示例）
 _JSON_EXAMPLE = """
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "title": "杭州三日文化与自然之旅",
   "destination": {"city_id": 257, "name": "杭州", "province": "浙江"},
   "days": 3,

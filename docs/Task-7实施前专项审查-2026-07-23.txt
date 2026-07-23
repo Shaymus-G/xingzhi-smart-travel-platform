@@ -1,0 +1,253 @@
+================================================================================
+  Task-7：AI 娱乐/商场候选接入与 PlanJSON 1.1 — 实施前专项审查
+  日期：2026-07-23
+  分支：feat/HBuilderX-to-CLI (4c3154d)
+================================================================================
+
+1. 审查基线
+────────────────────────────────────────────────────────────────────────────────
+分支              feat/HBuilderX-to-CLI
+Commit            4c3154d
+Task-1~6          全部已实现 (11M + 9??)
+type-check        ✅ 零错误
+H5/mp-weixin      ✅ DONE
+
+
+2. AI 计划完整调用链
+────────────────────────────────────────────────────────────────────────────────
+  前端: generate.vue → generatePlan() → POST /api/ai/plans/generate
+  后端: ai.py:generate_plan → ai_plan_service.generate_travel_plan()
+    1. 城市匹配 (travel_service.get_city_by_name + find_mentioned_city)
+    2. 查询候选资源 (3类: scenic/hotel/restaurant; 不含 entertainment/mall)
+    3. 查询用户偏好
+    4. 构建 Prompt (plan_prompts.build_plan_system_prompt + 候选数据)
+    5. DeepSeek 调用 (DeepSeekChatClient.chat)
+    6. JSON 提取 (plan_parser.extract_and_parse_json)
+    7. Pydantic 验证 (StructuredTravelPlan.model_validate)
+    8. 业务验证 (plan_validation.validate_plan_resources)
+    9. Markdown 渲染 (plan_renderer.render_travel_plan_markdown)
+    10. 保存 (travel_service.create_plan → plan_json=model_dump(), markdown)
+  返回: TravelPlanResponse
+
+  重新生成: 同一流程，新 plan.id。
+
+
+3. 模型提供方与配置
+────────────────────────────────────────────────────────────────────────────────
+  提供方: DeepSeek
+  模型: deepseek-v4-flash (backend/app/core/config.py: DEEPSEEK_MODEL)
+  配置: DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_TIMEOUT_SECONDS
+  JSON mode: response_format json_object (client.py)
+  System prompt: plan_prompts.build_plan_system_prompt()
+  Temperature: 0.7 (ai_plan_service.py:237)
+  Key缺失: 503 "AI 服务未配置"
+  代码阻塞: 无。模型和配置均就绪。
+
+
+4. 当前候选资源矩阵
+────────────────────────────────────────────────────────────────────────────────
+  资源类型        查询位置                   排序      最小   最大    Prompt区块
+  ──────────────────────────────────────────────────────────────────────────
+  scenic_spot     get_top_scenics_by_city    score↓   8      24     ✅ 候选景点
+  hotel           get_top_hotels_by_city     score↓   5      10     ✅ 候选酒店
+  restaurant      get_top_restaurants_by_city score↓   5      16     ✅ 候选餐厅
+  entertainment   ❌ 未查询                  —        —      —      ❌
+  shopping_mall   ❌ 未查询                  —        —      —      ❌
+
+  _orm_*_to_dict 函数仅存在 scenic/hotel/restaurant 版本。
+  候选 ID 映射仅 scenic_by_id/hotel_by_id/restaurant_by_id。
+  验证仅校验三类 ID。
+
+
+5. Entertainment 候选（待新增）
+────────────────────────────────────────────────────────────────────────────────
+  已有: get_top_entertainments_by_city (travel_service.py:285)
+  已有: Entertainment ORM 和 Schema
+  待建: _orm_entertainment_to_dict (ai_service.py)
+  推荐数量: min=3, max=8 (按天数: days*1, 与 hotel 同级)
+  推荐排序: score DESC, NULL LAST
+  Prompt字段: id, name, category, score, price, open_time (不含长 description)
+
+
+6. ShoppingMall 候选（待新增）
+────────────────────────────────────────────────────────────────────────────────
+  已有: get_top_malls_by_city (travel_service.py:328)
+  已有: ShoppingMall ORM 和 Schema
+  待建: _orm_mall_to_dict (ai_service.py)
+  推荐数量: min=3, max=8 (与 entertainment 同级)
+  推荐排序: score DESC, NULL LAST
+  领域类型: shopping_mall (不是 mall/shopping-mall)
+  Prompt字段: id, name, category, score, open_time (price 语义不明确，可选)
+
+
+7. resource_type 白名单位置
+────────────────────────────────────────────────────────────────────────────────
+  文件                                    当前值                           Task-7
+  ──────────────────────────────────────────────────────────────────────────
+  plan_schema.py:20 VALID_RESOURCE_TYPES    4类 (无娱乐/商场)                +2
+  plan_schema.py:30 _RESOURCE_TYPE_MAP     12条映射 (无娱乐/商场中文)        +8条
+  plan_schema.py:184 get_all_resource_ids  3类group                         +2
+  plan_validation.py                       3类候选校验                       +2
+  plan_prompts.py JSON示例                 4类                              +2
+  plan_renderer.py _resource_type_label    4类                              +2
+  frontend types/resource.ts               6类 (已含)                       不变
+  frontend normalizer                      isTravelResourceType含6类        不变
+
+  关键: 后端6处需扩展，前端已完全就绪。
+
+
+8. 资源 ID 真实性校验
+────────────────────────────────────────────────────────────────────────────────
+  当前 plan_validation.py:
+    validate_plan_resources():
+      scenic_by_id: dict[int, dict]   → 校验 scenic_spot ID
+      hotel_by_id: dict[int, dict]    → 校验 hotel ID
+      restaurant_by_id: dict[int,dict] → 校验 restaurant ID
+      general_activity → 跳过ID校验
+
+  Task-7 需新增:
+    entertainment_by_id: dict[int, dict] → 校验 entertainment ID
+    mall_by_id: dict[int, dict]          → 校验 shopping_mall ID
+
+  校验规则:
+    - entertainment: ID必须存在于entertainment_by_id
+    - shopping_mall: ID必须存在于mall_by_id
+    - 类型与ID不匹配 → error (不降级)
+    - general_activity 含 resource_id → warning
+    - 不存在ID → error (不降级, 整个计划拒绝)
+
+  推荐策略: 方案A — 校验失败整个计划拒绝，带错误重试模型。
+
+
+9. PlanJSON 1.1 目标
+────────────────────────────────────────────────────────────────────────────────
+  仅扩展:
+    schema_version = "1.1"
+    VALID_RESOURCE_TYPES += entertainment, shopping_mall
+    _RESOURCE_TYPE_MAP += 中文映射
+    get_all_resource_ids += 两类
+
+  不改变:
+    顶层结构, day/item/meal/hotel, transport_to_next, estimated_cost,
+    resource_id语义, general_activity, budget结构
+
+
+10. 1.0/1.1 兼容策略
+────────────────────────────────────────────────────────────────────────────────
+  新计划: schema_version = "1.1"
+  旧计划: 保持 "1.0", 不迁移
+  前端: normalizer 已兼容两者 (1.0 → 4类, 1.1 → 6类)
+  未知版本: warning + 继续渲染
+
+
+11. 前端兼容性 — 全部就绪
+────────────────────────────────────────────────────────────────────────────────
+  TravelResourceType: 已含6类 ✅
+  normalizer isTravelResourceType: 含 entertainment/shopping_mall ✅
+  normalizer schema_version: 接受 1.0/1.1 ✅
+  navigation.ts: 5类可导航资源 ✅
+  Transit: 5类端点 ✅
+  detail.vue: 通用渲染, resourceLabel适配6类 ✅
+  resource/detail: 支持 entertainment/shopping_mall ✅
+
+  前端 Task-7 无需修改。
+
+
+12. 计划生成页偏好
+────────────────────────────────────────────────────────────────────────────────
+  当前 PREF_TAGS: 自然风光/历史文化/本地美食/博物馆/亲子/摄影/休闲/户外
+  缺少: "购物", "娱乐", "夜生活"
+
+  决策: 不强制修改。现有偏好为自由文本标签, AI 可根据 destination 和候选自主安排。
+  但推荐 Task-7 增加 "购物" 和 "娱乐" 两个标签（最小前端改动, 1行代码）。
+
+  优先级: 可选。不阻塞计划生成。
+
+
+13. 重复资源与行程质量
+────────────────────────────────────────────────────────────────────────────────
+  当前校验:
+    同日重复景点 (MAX_SAME_SCENIC_PER_DAY=1)
+    跨天重复景点 (MAX_SAME_SCENIC_ACROSS_DAYS=2)
+    预算一致性检查
+
+  Task-7 扩展: 同日重复娱乐/商场 (复用现有重复检查逻辑)
+  不新增独立的娱乐/商场重复规则。
+
+
+14. 候选占位数量与 Token 控制
+────────────────────────────────────────────────────────────────────────────────
+  新增两类后 Prompt Token 增加估算:
+    每类最多8条 × ~80 tokens/条 = ~640 tokens × 2 = ~1280 tokens
+    在模型上下文限制内 (deepseek-v4-flash 支持 128K)
+  推荐: 娱乐/商场使用较小上限(3-8条), 不传长 description
+
+
+15. Task-7 最终方案: 方案 B
+────────────────────────────────────────────────────────────────────────────────
+  候选查询 + Prompt扩展 + schema_version 1.1 + 白名单 + ID校验
+
+  理由:
+    1. 候选查询和 Prompt 扩展到 5 类 (最小可用集)
+    2. 白名单和 ID 校验确保不虚构
+    3. schema_version 标记区分新旧计划
+    4. 不引入新 Schema 系统 (复用现有 Pydantic)
+    5. 前端完全兼容, 零修改
+
+
+16. Task-7 最终文件范围
+────────────────────────────────────────────────────────────────────────────────
+  后端/AI (6个修改):
+    ai/xingzhi_ai/plan_schema.py          — VALID_RESOURCE_TYPES +2, _RESOURCE_TYPE_MAP +8, get_all_resource_ids +2, schema_version→1.1
+    ai/xingzhi_ai/plan_prompts.py         — JSON示例 +entertainment/shopping_mall item
+    ai/xingzhi_ai/plan_validation.py      — +entertainment_by_id, +mall_by_id, +校验逻辑
+    ai/xingzhi_ai/plan_renderer.py        — _resource_type_label +2
+    backend/app/services/ai_plan_service.py — 查询娱乐/商场候选, ID映射, Prompt区块
+    backend/app/services/ai_service.py    — 新增 _orm_entertainment_to_dict/_orm_mall_to_dict
+
+  前端 (可选, 1个微小修改):
+    frontend/src/pages/plan/generate.vue  — PREF_TAGS 增加 "购物" "娱乐" (可选)
+
+
+17. 明确移出 Task-7 的内容
+────────────────────────────────────────────────────────────────────────────────
+  Transit, 收藏评论, 资源详情, 城市Tab, normalizer, navigation, manifest, 数据库migration
+
+
+18. 测试矩阵
+────────────────────────────────────────────────────────────────────────────────
+  候选: 五类均有/娱乐空/商场空/两类空
+  AI输出: 1.1正常/1.0兼容/entertainment合法ID/shopping_mall合法ID/mall非法类型
+  校验: 虚构ID拒绝/类型不匹配拒绝/general_activity含ID警告
+  前端: 1.1正常渲染/两类标签/导航/Transit
+  重新生成: 新计划1.1/旧计划不变
+
+
+19. 验收标准
+────────────────────────────────────────────────────────────────────────────────
+    1-3. 构建通过
+    4. 新计划 schema_version="1.1"
+    5. 历史1.0兼容
+    6-9. 候选/白名单/ID校验
+    10-13. 类型约束/不虚构/结构不变
+    14-18. 前端兼容/无修改(or仅pref标签)
+    19. 无新依赖
+
+
+20. 最终结论
+────────────────────────────────────────────────────────────────────────────────
+  问题                                    答案
+  ───────────────────────────────────────────────────────────────
+  Task-1~6 完整？                          是
+  Task-7 可立即实施？                      是
+  当前候选包含哪些？                        scenic/hotel/restaurant (3类)
+  推荐方案？                               方案 B (候选+Prompt+白名单+ID校验)
+  前端需要修改吗？                          否 (完全兼容); 可选增加偏好标签
+  schema_version 改为？                    1.1
+  Task-7 文件范围？                         6个后端/AI + 1个可选前端
+  最大风险？                               AI仍可能虚构ID (需严格Prompt+双重校验)
+
+================================================================================
+  报告完成时间：2026-07-23
+  0 文件修改
+================================================================================

@@ -1,0 +1,254 @@
+================================================================================
+  Task-8：三端集成、HBuilderX/Android 打包与最终交付 — 实施前专项审查
+  日期：2026-07-23
+  分支：feat/HBuilderX-to-CLI (4c3154d)
+================================================================================
+
+1. 审查基线
+────────────────────────────────────────────────────────────────────────────────
+分支              feat/HBuilderX-to-CLI
+Commit            4c3154d
+Task-1~7          全部已实现 (17M + 9??)
+type-check        ✅ 零错误
+H5 构建           ✅ DONE
+mp-weixin 构建    ✅ DONE
+
+
+2. Task-1~7 完整性
+────────────────────────────────────────────────────────────────────────────────
+  Task    状态    关键交付物
+  ────────────────────────────────────────────────────
+  Task-1  ✅      resource/plan/transit types, normalizer
+  Task-2  ✅      分页/删除/重试/重新生成
+  Task-3  ✅      通用详情/navigation.ts
+  Task-4  ✅      API封装/5Tab/资源扩展
+  Task-5  ✅      ResourceSocialSection/五类社交/收藏页
+  Task-6  ✅      TransitRoutePanel/实时路线
+  Task-7  ✅      AI候选6类/schema 1.1
+
+  未提交: 17M + 9?? (全部Task-1~7修改)
+
+
+3. 前端构建结果
+────────────────────────────────────────────────────────────────────────────────
+  npm run type-check       ✅ 零错误
+  npm run build:h5         ✅ DONE (dist/build/h5/)
+  npm run build:mp-weixin  ✅ DONE (dist/build/mp-weixin/)
+  npm run                  dev/build/dev:h5/build:h5/dev:mp-weixin/build:mp-weixin/type-check
+
+  无 App 构建脚本 (dev:app / build:app 不存在)
+  无 App 云打包 CLI 能力 → 需 HBuilderX 执行
+
+
+4. 前端项目根目录
+────────────────────────────────────────────────────────────────────────────────
+  package.json: frontend/           ← CLI 项目根 ✅
+  vite.config.ts: frontend/         ← Vite 配置 ✅
+  src/main.ts: frontend/src/        ← 入口 ✅
+  src/App.vue: frontend/src/        ← 根组件 ✅
+  src/pages.json: frontend/src/     ← 页面配置 ✅
+  src/manifest.json: frontend/src/  ← 平台配置 ✅
+
+  HBuilderX 应打开: frontend/ (含 package.json 的目录)
+  HBuilderX 会自动识别 src/ 为源码目录 (uni-app CLI 项目规范)
+
+  无历史 HBuilderX 原生残留。无重复 pages.json/manifest.json。
+  不需要迁移文件。
+
+
+5. HBuilderX 操作矩阵
+────────────────────────────────────────────────────────────────────────────────
+  操作              方式                        前置条件              当前状态
+  ──────────────────────────────────────────────────────────────────────────
+  H5 运行            npm run dev:h5              无需                     ✅
+  微信小程序运行      npm run dev:mp-weixin       微信开发者工具            ✅
+  Android 模拟器      HBuilderX → 运行 → 模拟器   HBuilderX + 模拟器       ⚠️ 需HBuilderX
+  Android 真机        HBuilderX → 运行 → 真机     USB调试 + 同一网络       ⚠️ 需配置
+  App 打包            HBuilderX → 发行 → 云打包   HBuilderX + 证书         ⚠️ 需配置
+
+
+6. package.json 审查
+────────────────────────────────────────────────────────────────────────────────
+  Vue: 3.4.21        ✅
+  uni-app: 3.0.0-alpha ✅
+  Vite: 5.1.6         ✅
+  TypeScript: 5.4.2   ✅
+  Node: v25.2.0       ⚠️ uni-app alpha 版本官方未明确支持 Node 25
+  建议: 使用 Node 18 LTS 以获得最佳兼容性 (非阻塞, 当前可工作)
+
+
+7. manifest.json 配置矩阵
+────────────────────────────────────────────────────────────────────────────────
+  字段              当前值              状态
+  ────────────────────────────────────────────────────────
+  name              "frontend"           ⚠️ 应改为"行知"
+  appid             ""                   ⚠️ 空值, 正式发布需申请
+  versionName       "1.0.0"              ✅
+  versionCode       "100"                ✅
+  vueVersion        "3"                  ✅
+  app-plus          已配置               ✅
+  Android permissions 已配置 (无定位)    ✅
+  mp-weixin         已配置               ✅
+
+  缺失:
+    - appid 为空 (占位) → 正式发布阻塞
+    - 无 Android package name → App 打包阻塞
+    - 无图标/splash 资源 → 不阻塞开发联调, 阻塞商店发布
+    - 无定位权限 (正确 — Task-6 无需定位)
+
+  Task-8 不应修改 manifest (属发布准备, 非代码问题)
+
+
+8. pages.json 完整性
+────────────────────────────────────────────────────────────────────────────────
+  14 个页面全部注册 ✅
+  所有 navigateTo/redirectTo/switchTab 目标存在 ✅
+  TabBar 3 页: home, ai/chat, profile/profile ✅
+  无未注册页面, 无已删除残留 ✅
+  微信包体: 当前 14 页, 无分包需求
+
+
+9. API Base URL 数据通路
+────────────────────────────────────────────────────────────────────────────────
+  默认值: VITE_API_BASE_URL (.env.development → Render 地址)
+  运行时: getApiBaseUrl() → uni.storage override ?? env default
+  request.ts: 每次请求动态读取 getApiBaseUrl()
+  settings.vue: 已存在设置页 (查看/修改/测试/恢复)
+
+  ✅ 无硬编码 localhost
+  ✅ 运行时动态读取
+  ✅ 手机端可修改
+  ✅ 修改后立即生效
+  ✅ 地址变更自动清除登录态
+
+
+10. 手机端 API 配置现状
+────────────────────────────────────────────────────────────────────────────────
+  设置页: pages/profile/settings.vue ✅
+    功能: 查看当前地址/来源/测试连接/修改/恢复默认
+    地址校验: 格式/HTTPS/去除/api后缀/本地允许HTTP
+    连通性测试: GET /api/health (5秒超时, 不携带JWT)
+    地址变更: 自动清除Token和用户缓存
+
+  结论: 手机端 API Base URL 配置已完整闭环。Task-8 无新增需求。
+
+
+11. 用户 API Key
+────────────────────────────────────────────────────────────────────────────────
+  页面: pages/profile/edit.vue
+  功能: 用户可输入 DeepSeek API Key, 已配置时隐藏原文
+  存储: 提交到后端 user profile (api_key 字段)
+  用途说明: "配置你自己的 DeepSeek API Key, 用于 AI 对话功能"
+  安全: 已配置时显示掩码 "已配置（输入新值替换）"
+
+  ⚠️ 但 Task-7 确认后端 AI 使用平台 Key (DEEPSEEK_API_KEY 环境变量)
+  用户 api_key 字段是否被 AI Service 读取 → 查看代码确认
+
+
+12. request.ts 审查
+────────────────────────────────────────────────────────────────────────────────
+  ✅ 动态读取 getApiBaseUrl()
+  ✅ JWT Token 注入
+  ✅ 401 全局跳转 (防重入)
+  ✅ 422 detail 解析
+  ✅ 网络错误转换中文消息
+  ✅ URL 为空时 reject (明确错误)
+  ⚠️ 成功解包: resolve(data) - DELETE空data返回undefined (可接受)
+
+  不需要修改。
+
+
+13. 认证闭环
+────────────────────────────────────────────────────────────────────────────────
+  ✅ 注册/登录/Token存储/注入/401跳转/退出清理
+  ✅ 启动时从storage恢复
+  ✅ stores/user.ts initAuthFromStorage
+
+
+14. 生产后端与HTTPS
+────────────────────────────────────────────────────────────────────────────────
+  生产地址: https://xingzhi-smart-travel-platform.onrender.com
+  .env.development/.env.production 均指向该地址
+  Render 支持 HTTPS ✅
+  CORS: 需确认后端已配置 (backend/app/core/middleware.py)
+
+
+15. 平台特定网络
+────────────────────────────────────────────────────────────────────────────────
+  Android: 127.0.0.1→手机自身, 10.0.2.2→模拟器宿主机, 局域网IP→真机
+  微信: 需HTTPS + 备案域名 + 微信后台配置
+  H5: 需HTTPS + CORS + SPA fallback
+
+
+16. 日志和敏感信息
+────────────────────────────────────────────────────────────────────────────────
+  console.log: 30 处 (home/detail/scenic/plan/App/city-card)
+  ⚠️ 无Token/密码/API Key泄露
+  ⚠️ scenic/detail 打印 onLoad options (含id, 非敏感)
+  ⚠️ request.ts:134 打印 url + method + errMsg (无headers/body)
+  推荐: 生产构建时保留错误日志, 删除导航调试日志 (~20处)
+
+
+17. uni统计
+────────────────────────────────────────────────────────────────────────────────
+  当前日志出现 "uni统计 2.0 统计上报失败"
+  建议: 正式发布关闭或正确配置 uni 统计 appid
+
+
+18. 方案选择: 方案 B
+────────────────────────────────────────────────────────────────────────────────
+  三端配置闭环 + 必要修复 + 文档
+
+  Task-8 实施范围:
+    1. 更新 manifest.json 应用名称
+    2. 清理敏感调试日志 (~20处导航日志)
+    3. 更新 README.md + HBuilderX 运行说明
+    4. 创建发布前检查清单
+    5. 三端全业务回归矩阵
+
+  不实施:
+    App正式打包 (需HBuilderX + 证书)
+    微信上传 (需微信后台配置)
+    H5部署 (需域名/静态托管)
+
+
+19. Task-8 文件范围
+────────────────────────────────────────────────────────────────────────────────
+  修改:
+    frontend/src/manifest.json        — 应用名称
+    frontend/src/pages/home/home.vue  — 清理导航调试日志
+    frontend/src/pages/plan/detail.vue — 保留 normalizer warning (DEV only)
+    README.md                          — 更新项目说明
+
+  新建:
+    docs/HBuilderX与三端运行说明.md    — 运行/打包/调试完整说明
+    docs/发布前检查清单.md             — 阻塞项清单
+
+
+20. 阻塞项分类
+────────────────────────────────────────────────────────────────────────────────
+  前端代码阻塞: 无
+  后端代码阻塞: 无
+  本地环境: HBuilderX 未安装 / Python 不可用
+  发布平台: appid 空值 / Android package 缺失 / 微信域名未配置
+  生产配置: DeepSeek Key / AMAP Key (Render 端)
+
+
+21. 最终结论
+────────────────────────────────────────────────────────────────────────────────
+  问题                                    答案
+  ───────────────────────────────────────────────────────────────
+  Task-1~7 完整？                          是
+  Task-8 可立即实施？                      是
+  HBuilderX 打开目录？                     frontend/
+  是否需要迁移文件？                        否
+  API Base URL 是否硬编码？                否
+  手机端可否修改 API？                     是 (settings.vue)
+  修改后是否立即生效？                      是
+  console.log 是否泄露敏感信息？            否
+  Task-8 文件范围？                         4修改 + 2新建
+
+================================================================================
+  报告完成时间：2026-07-23
+  0 文件修改
+================================================================================

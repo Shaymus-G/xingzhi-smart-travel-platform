@@ -1,67 +1,159 @@
 <script setup lang="ts">
 /**
- * 城市详情页 — 展示城市信息 + 景点/酒店/餐厅
+ * 城市详情页 — 展示城市信息 + 五类资源（景点/酒店/餐厅/娱乐/商场）
  */
-import { ref, onMounted } from 'vue'
-import { onLoad, onShow, onReady } from '@dcloudio/uni-app'
+import { ref, reactive } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
 import NavBar from '@/components/NavBar.vue'
 import ScenicCard from '@/components/ScenicCard.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import Loading from '@/components/Loading.vue'
-import { getCityDetail, getScenics, getHotels, getRestaurants } from '@/api/travel'
 import SafeImage from '@/components/SafeImage.vue'
-import type { City, ScenicSpot, Hotel, Restaurant } from '@/types/travel'
+import { openResourceDetail } from '@/utils/navigation'
+import {
+  getCityDetail, getScenics, getHotels, getRestaurants,
+  getEntertainments, getMalls,
+} from '@/api/travel'
+import type { City, ScenicSpot, Hotel, Restaurant, Entertainment, ShoppingMall } from '@/types/travel'
 
-// ========== 路由参数 ==========
+// ==================== 类型 ====================
+
+type CityResourceTab = 'scenic_spot' | 'hotel' | 'restaurant' | 'entertainment' | 'shopping_mall'
+
+interface TabState<T> {
+  items: T[]
+  loading: boolean
+  loaded: boolean
+  error: string | null
+}
+
+const TABS: Array<{ key: CityResourceTab; label: string }> = [
+  { key: 'scenic_spot', label: '景点' },
+  { key: 'hotel', label: '酒店' },
+  { key: 'restaurant', label: '餐厅' },
+  { key: 'entertainment', label: '娱乐' },
+  { key: 'shopping_mall', label: '商场' },
+]
+
+// ==================== 路由参数 ====================
+
 const cityId = ref(0)
-
-// ========== 数据 ==========
 const city = ref<City | null>(null)
-const scenics = ref<ScenicSpot[]>([])
-const hotels = ref<Hotel[]>([])
-const restaurants = ref<Restaurant[]>([])
-const loading = ref(false)
-const currentTab = ref<'scenics' | 'hotels' | 'restaurants'>('scenics')
+const cityLoading = ref(false)
+const cityError = ref<string | null>(null)
+const currentTab = ref<CityResourceTab>('scenic_spot')
 
-// ========== 方法 ==========
+// ==================== 五类资源状态 ====================
 
-async function loadAll() {
-  if (!cityId.value) return
-  loading.value = true
-  try {
-    const [cityData, scenicData, hotelData, restData] = await Promise.all([
-      getCityDetail(cityId.value),
-      getScenics({ city_id: cityId.value, limit: 20 }),
-      getHotels({ city_id: cityId.value, limit: 10 }),
-      getRestaurants({ city_id: cityId.value, limit: 10 }),
-    ])
-    city.value = cityData
-    scenics.value = scenicData || []
-    hotels.value = hotelData || []
-    restaurants.value = restData || []
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : '加载失败'
-    uni.showToast({ title: msg, icon: 'none' })
-  } finally {
-    loading.value = false
+const scenicState = reactive<TabState<ScenicSpot>>({ items: [], loading: false, loaded: false, error: null })
+const hotelState = reactive<TabState<Hotel>>({ items: [], loading: false, loaded: false, error: null })
+const restaurantState = reactive<TabState<Restaurant>>({ items: [], loading: false, loaded: false, error: null })
+const entertainmentState = reactive<TabState<Entertainment>>({ items: [], loading: false, loaded: false, error: null })
+const mallState = reactive<TabState<ShoppingMall>>({ items: [], loading: false, loaded: false, error: null })
+
+function getState(tab: CityResourceTab): TabState<any> {
+  switch (tab) {
+    case 'scenic_spot': return scenicState
+    case 'hotel': return hotelState
+    case 'restaurant': return restaurantState
+    case 'entertainment': return entertainmentState
+    case 'shopping_mall': return mallState
   }
 }
 
-function goScenicDetail(id: number) {
+// ==================== 城市信息加载 ====================
+
+async function loadCityInfo(): Promise<void> {
+  if (!cityId.value) return
+  cityLoading.value = true
+  cityError.value = null
+  try {
+    city.value = await getCityDetail(cityId.value)
+  } catch (err: unknown) {
+    cityError.value = err instanceof Error ? err.message : '加载失败'
+    uni.showToast({ title: cityError.value, icon: 'none' })
+  } finally {
+    cityLoading.value = false
+  }
+}
+
+// ==================== 资源加载 ====================
+
+async function loadScenics(): Promise<void> {
+  const s = scenicState
+  if (s.loaded || s.loading) return
+  s.loading = true; s.error = null
+  try { s.items = await getScenics({ city_id: cityId.value, limit: 50 }) || []; s.loaded = true }
+  catch (err: unknown) { s.error = (err instanceof Error ? err.message : '景点加载失败'); s.loaded = false }
+  finally { s.loading = false }
+}
+
+async function loadHotels(): Promise<void> {
+  const s = hotelState
+  if (s.loaded || s.loading) return
+  s.loading = true; s.error = null
+  try { s.items = await getHotels({ city_id: cityId.value, limit: 50 }) || []; s.loaded = true }
+  catch (err: unknown) { s.error = (err instanceof Error ? err.message : '酒店加载失败'); s.loaded = false }
+  finally { s.loading = false }
+}
+
+async function loadRestaurants(): Promise<void> {
+  const s = restaurantState
+  if (s.loaded || s.loading) return
+  s.loading = true; s.error = null
+  try { s.items = await getRestaurants({ city_id: cityId.value, limit: 50 }) || []; s.loaded = true }
+  catch (err: unknown) { s.error = (err instanceof Error ? err.message : '餐厅加载失败'); s.loaded = false }
+  finally { s.loading = false }
+}
+
+async function loadEntertainments(): Promise<void> {
+  const s = entertainmentState
+  if (s.loaded || s.loading) return
+  s.loading = true; s.error = null
+  try { s.items = await getEntertainments({ city_id: cityId.value, limit: 50 }) || []; s.loaded = true }
+  catch (err: unknown) { s.error = (err instanceof Error ? err.message : '娱乐资源加载失败'); s.loaded = false }
+  finally { s.loading = false }
+}
+
+async function loadMalls(): Promise<void> {
+  const s = mallState
+  if (s.loaded || s.loading) return
+  s.loading = true; s.error = null
+  try { s.items = await getMalls({ city_id: cityId.value, limit: 50 }) || []; s.loaded = true }
+  catch (err: unknown) { s.error = (err instanceof Error ? err.message : '商场数据加载失败'); s.loaded = false }
+  finally { s.loading = false }
+}
+
+async function ensureTabLoaded(tab: CityResourceTab): Promise<void> {
+  switch (tab) {
+    case 'scenic_spot': await loadScenics(); return
+    case 'hotel': await loadHotels(); return
+    case 'restaurant': await loadRestaurants(); return
+    case 'entertainment': await loadEntertainments(); return
+    case 'shopping_mall': await loadMalls(); return
+  }
+}
+
+// ==================== Tab 切换 ====================
+
+function onTabChange(tab: CityResourceTab): void {
+  currentTab.value = tab
+  void ensureTabLoaded(tab)
+}
+
+// ==================== 导航 ====================
+
+function goScenicDetail(id: number): void {
   uni.navigateTo({ url: `/pages/scenic/detail?id=${id}` })
 }
 
-function onHotelTap(_id: number) {
-  uni.showToast({ title: '酒店详情页开发中', icon: 'none' })
+function onResourceTap(type: CityResourceTab, id: number): void {
+  openResourceDetail(type, id)
 }
 
-function onRestaurantTap(_id: number) {
-  uni.showToast({ title: '餐厅详情页开发中', icon: 'none' })
-}
+// ==================== 生命周期 ====================
 
-// ========== 生命周期 ==========
 onLoad((options: any) => {
-  console.log('[city/detail] onLoad options:', JSON.stringify(options))
   const id = Number(options?.id)
   if (!id || isNaN(id)) {
     uni.showToast({ title: '城市ID无效', icon: 'none' })
@@ -69,34 +161,22 @@ onLoad((options: any) => {
     return
   }
   cityId.value = id
-  loadAll()
-})
-
-onShow(() => {
-  console.log('[city/detail] onShow, cityId:', cityId.value)
-})
-
-onReady(() => {
-  console.log('[city/detail] onReady')
+  // 并行加载城市信息 + 默认 Tab (景点)
+  void Promise.all([loadCityInfo(), ensureTabLoaded('scenic_spot')])
 })
 </script>
 
 <template>
   <view class="city-detail-page">
     <NavBar :title="city?.name || '城市详情'" :show-back="true" />
-    <view class="debug-title">城市详情页 id={{ cityId }}</view>
 
     <scroll-view class="city-scroll" scroll-y enhanced :show-scrollbar="false">
-      <Loading :visible="loading" />
+      <Loading :visible="cityLoading" />
 
-      <template v-if="!loading && city">
+      <template v-if="!cityLoading && city">
         <!-- 城市头部 -->
         <view class="city-header">
-          <SafeImage
-            class="city-cover"
-            :src="city.cover_image"
-            mode="aspectFill"
-          />
+          <SafeImage class="city-cover" :src="city.cover_image" mode="aspectFill" />
           <view class="city-header-info">
             <view class="city-name-row">
               <text class="city-name">{{ city.name }}</text>
@@ -107,91 +187,83 @@ onReady(() => {
           </view>
         </view>
 
-        <!-- Tab 切换 -->
-        <view class="city-tabs">
-          <view
-            v-for="tab in [
-              { key: 'scenics', label: '景点', count: scenics.length },
-              { key: 'hotels', label: '酒店', count: hotels.length },
-              { key: 'restaurants', label: '餐厅', count: restaurants.length },
-            ]"
-            :key="tab.key"
-            class="city-tab"
-            :class="{ active: currentTab === tab.key }"
-            @tap="currentTab = tab.key as 'scenics' | 'hotels' | 'restaurants'"
-          >
-            {{ tab.label }} ({{ tab.count }})
-          </view>
-        </view>
-
-        <!-- 景点 -->
-        <view v-if="currentTab === 'scenics'" class="city-section">
-          <EmptyState v-if="scenics.length === 0" text="暂无景点" />
-          <view v-for="s in scenics" :key="s.id" class="city-card-wrapper">
-            <ScenicCard
-              :scenic-id="s.id"
-              :name="s.name"
-              :image-url="s.image_url"
-              :score="s.score"
-              :price="s.price"
-              :category="s.category"
-              :address="s.address"
-              @click="goScenicDetail"
-            />
-          </view>
-        </view>
-
-        <!-- 酒店 -->
-        <view v-if="currentTab === 'hotels'" class="city-section">
-          <EmptyState v-if="hotels.length === 0" text="暂无酒店" />
-          <view
-            v-for="h in hotels"
-            :key="h.id"
-            class="city-simple-card"
-            @tap="onHotelTap(h.id)"
-          >
-            <SafeImage
-              class="city-simple-card-img"
-              :src="h.image_url"
-              mode="aspectFill"
-            />
-            <view class="city-simple-card-body">
-              <text class="city-simple-card-name">{{ h.name }}</text>
-              <text class="city-simple-card-meta">
-                <text v-if="h.score">★ {{ h.score }}  </text>
-                <text v-if="h.price">¥{{ h.price }}</text>
-              </text>
-              <text v-if="h.address" class="city-simple-card-addr">{{ h.address }}</text>
+        <!-- Tab 横向滚动 -->
+        <scroll-view class="city-tabs-scroll" scroll-x :show-scrollbar="false">
+          <view class="city-tabs">
+            <view
+              v-for="tab in TABS"
+              :key="tab.key"
+              class="city-tab"
+              :class="{ active: currentTab === tab.key }"
+              @tap="onTabChange(tab.key)"
+            >
+              {{ tab.label }}
             </view>
           </view>
-        </view>
+        </scroll-view>
 
-        <!-- 餐厅 -->
-        <view v-if="currentTab === 'restaurants'" class="city-section">
-          <EmptyState v-if="restaurants.length === 0" text="暂无餐厅" />
-          <view
-            v-for="r in restaurants"
-            :key="r.id"
-            class="city-simple-card"
-            @tap="onRestaurantTap(r.id)"
-          >
-            <SafeImage
-              class="city-simple-card-img"
-              :src="r.image_url"
-              mode="aspectFill"
-            />
-            <view class="city-simple-card-body">
-              <text class="city-simple-card-name">{{ r.name }}</text>
-              <text class="city-simple-card-meta">
-                <text v-if="r.category">{{ r.category }}  </text>
-                <text v-if="r.score">★ {{ r.score }}  </text>
-                <text v-if="r.price_level">{{ r.price_level }}</text>
-              </text>
-              <text v-if="r.address" class="city-simple-card-addr">{{ r.address }}</text>
+        <!-- 通用资源 Tab 内容 -->
+        <view v-for="tab in TABS" :key="tab.key">
+          <view v-if="currentTab === tab.key" class="city-section">
+            <!-- Loading -->
+            <view v-if="getState(tab.key).loading" class="city-sub-status">
+              <text>加载中...</text>
             </view>
+
+            <!-- Error -->
+            <view v-else-if="getState(tab.key).error" class="city-sub-status city-sub-error">
+              <text>{{ getState(tab.key).error }}</text>
+              <view class="city-retry-btn" @tap="ensureTabLoaded(tab.key)">
+                <text>重试</text>
+              </view>
+            </view>
+
+            <!-- Empty -->
+            <EmptyState
+              v-else-if="getState(tab.key).loaded && getState(tab.key).items.length === 0"
+              :text="'该城市暂无' + tab.label + (tab.key === 'entertainment' ? '资源' : tab.key === 'shopping_mall' ? '数据' : '')"
+            />
+
+            <!-- Ready — scenic_spot uses ScenicCard -->
+            <template v-else-if="getState(tab.key).loaded && tab.key === 'scenic_spot'">
+              <view v-for="s in scenicState.items" :key="s.id" class="city-card-wrapper">
+                <ScenicCard
+                  :scenic-id="s.id" :name="s.name" :image-url="s.image_url"
+                  :score="s.score" :price="s.price" :category="s.category" :address="s.address"
+                  @click="goScenicDetail"
+                />
+              </view>
+            </template>
+
+            <!-- Ready — other types use simple card -->
+            <template v-else-if="getState(tab.key).loaded">
+              <view
+                v-for="item in getState(tab.key).items"
+                :key="item.id"
+                class="city-simple-card"
+                @tap="onResourceTap(tab.key, item.id)"
+              >
+                <SafeImage class="city-simple-card-img" :src="item.image_url" mode="aspectFill" />
+                <view class="city-simple-card-body">
+                  <text class="city-simple-card-name">{{ item.name }}</text>
+                  <text class="city-simple-card-meta">
+                    <text v-if="item.category">{{ item.category }}  </text>
+                    <text v-if="item.score">★ {{ item.score }}  </text>
+                    <text v-if="tab.key === 'restaurant' && item.price_level">{{ item.price_level }}</text>
+                    <text v-else-if="item.price != null">¥{{ item.price }}</text>
+                  </text>
+                  <text v-if="item.address" class="city-simple-card-addr">{{ item.address }}</text>
+                </view>
+              </view>
+            </template>
           </view>
         </view>
       </template>
+
+      <!-- 城市加载失败 -->
+      <view v-else-if="!cityLoading && cityError" class="city-sub-status city-sub-error" style="padding-top:200rpx;">
+        <text>{{ cityError }}</text>
+      </view>
 
       <view style="height: 40rpx;" />
     </scroll-view>
@@ -199,14 +271,6 @@ onReady(() => {
 </template>
 
 <style lang="scss" scoped>
-.debug-title {
-  background: #FF6B35;
-  color: #fff;
-  font-size: 24rpx;
-  padding: 8rpx 24rpx;
-  text-align: center;
-}
-
 .city-detail-page {
   height: 100vh;
   display: flex;
@@ -268,20 +332,25 @@ onReady(() => {
   line-height: 1.6;
 }
 
-.city-tabs {
-  display: flex;
+// Tabs
+.city-tabs-scroll {
+  white-space: nowrap;
   background: #fff;
   margin-top: 16rpx;
-  padding: 0 32rpx;
+}
+
+.city-tabs {
+  display: inline-flex;
+  padding: 0 24rpx;
 }
 
 .city-tab {
-  flex: 1;
-  text-align: center;
-  padding: 24rpx 0;
+  display: inline-block;
+  padding: 24rpx 24rpx;
   font-size: 28rpx;
   color: #666;
   border-bottom: 4rpx solid transparent;
+  white-space: nowrap;
 }
 
 .city-tab.active {
@@ -290,10 +359,33 @@ onReady(() => {
   border-bottom-color: #4A90D9;
 }
 
+// Section
 .city-section {
   background: #fff;
   padding: 16rpx 32rpx;
   min-height: 200rpx;
+}
+
+.city-sub-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 80rpx;
+  font-size: 28rpx;
+  color: #999;
+}
+
+.city-sub-error {
+  color: #d93025;
+}
+
+.city-retry-btn {
+  margin-top: 16rpx;
+  padding: 10rpx 36rpx;
+  border: 1px solid #4A90D9;
+  border-radius: 24rpx;
+  font-size: 26rpx;
+  color: #4A90D9;
 }
 
 .city-card-wrapper {

@@ -1,0 +1,767 @@
+================================================================================
+  Task-2：计划 CRUD、分页、失败重试与重新生成 — 实施前专项审查
+  日期：2026-07-23
+  分支：feat/HBuilderX-to-CLI (4c3154d)
+================================================================================
+
+1. 审查基线
+────────────────────────────────────────────────────────────────────────────────
+分支              feat/HBuilderX-to-CLI
+Commit            4c3154d
+Git 状态          Task-1 已实现未提交（3M + 4?? + 3 文档??）
+Task-1 交付物     全部完成：plan_json:unknown|null ✅ as PlanJson 已消除 ✅
+                  normalizer 已接入 ✅ 构建全通过 ✅
+npm run type-check        ✅ 零错误
+npm run build:h5          ✅ DONE
+npm run build:mp-weixin   ✅ DONE
+
+结论：Task-1 完整。Task-2 无 Task-1 导致的阻塞项。
+
+
+2. Task-1 对 Task-2 的影响
+────────────────────────────────────────────────────────────────────────────────
+  正面影响：
+    - detail.vue 已有 hasFallbackMarkdown 和 normalizedPlan 状态（Task-2 可直接使用）
+    - types/social.ts 的 TargetType 已扩展到 5 类（不影响 Task-2 但已就绪）
+    - 新增类型文件无循环依赖（Task-2 可安全导入）
+
+  Task-2 需要依赖 Task-1 的内容：
+    - detail.vue 中的 normalizeTravelPlanRecord（重试时复用）
+    - types/plan.ts 的类型（无直接引用需求）
+    - types/travel.ts 的 TravelPlan 类型（plan_json:unknown|null 不变）
+
+  无负面影响。
+
+
+3. 当前计划列表数据通路
+────────────────────────────────────────────────────────────────────────────────
+
+  [页面进入]
+    list.vue:13  onMounted(async () => {
+    → getMyPlans({ skip: 0, limit: 50 })
+    → api/travel.ts:88: GET /api/travel/plans?skip=0&limit=50 (JWT)
+    → request() 自动解包 data → TravelPlan[]
+    → plans.value = data
+    → isLoading = false
+
+  [空状态]
+    plans.length === 0 && !isLoading → "暂无旅行计划"
+
+  [错误状态]
+    catch (_err) { /* 空 */ }
+    → 保持 plans=[]  → 显示空状态（与"无计划"混淆）
+
+  [点击卡片]
+    goToDetail(plan.id) → uni.navigateTo('/pages/plan/detail?id=' + id)
+
+  [返回行为]
+    无 onShow → 从详情返回不会自动刷新列表
+
+  关键缺口：
+    - 无 onShow 刷新 → 从详情删除后返回，列表不反映变化
+    - catch 为空 → 网络错误显示为空列表
+    - 无分页 → limit:50 一次拉取
+    - 无下拉刷新
+    - 无删除入口
+    - onMounted 而非 onLoad → App 从后台回来不会重新请求
+
+
+4. 当前列表状态和缺口
+────────────────────────────────────────────────────────────────────────────────
+  当前状态机（仅 2 个状态）：
+    loading → plans (ready/empty)
+    error → 伪 empty（catch 为空，plans=[]）
+
+  需要补充的状态机：
+    loadingInitial  → 首次加载，显示 loading spinner
+    ready           → 数据正常，列表渲染
+    empty           → 数据为空且非错误，显示空引导
+    refreshing      → 下拉刷新中，保留旧数据
+    loadingMore     → 触底加载更多，列表底部显示加载指示器
+    errorInitial    → 首次加载失败，显示错误+重试按钮
+    errorLoadMore   → 加载更多失败，Toast提示
+    deleting        → 删除中，对应项显示 loading 或禁用
+    noMore          → 已加载全部，底部显示"没有更多"
+
+  缺失的状态变量：
+    - refreshing: boolean
+    - loadingMore: boolean
+    - hasMore: boolean
+    - error: string | null（区分网络错误和空列表）
+    - page/skip: number
+
+
+5. 后端列表契约
+────────────────────────────────────────────────────────────────────────────────
+  来源：backend/app/api/travel.py:235-244
+
+  GET /api/travel/plans
+    JWT: 是（get_current_user）
+    skip: Query(0, ge=0)
+    limit: Query(20, ge=1, le=100)
+    排序: created_at DESC (travel_service.py:243)
+    过滤: user_id == current_user.id
+    返回: { code:0, data: TravelPlanResponse[] }
+          → request() 自动解包为 TravelPlan[]
+
+  关键事实：
+    - 默认 limit=20（不是 50，当前前端传入 50 但仍被后端限制在 ≤100）
+    - 后端不返回 total
+    - 后端不返回 has_more
+    - 空数组 = 该用户无计划或已到末尾
+    - 删除后 skip 偏移：若删除第一页中间一项，下次加载更多时会漏掉被挤出的一项
+    - 新增计划后按 created_at DESC 排序，新计划出现在第一页顶部
+
+  结论：使用 skip/limit 追加分页。
+        从返回数组长度 < limit 判断 hasMore。
+
+
+6. 推荐分页方案
+────────────────────────────────────────────────────────────────────────────────
+
+  决策：方案 A — skip/limit 追加
+
+  实现：
+    const PAGE_SIZE = 20
+    let currentSkip = 0
+
+    首次: getMyPlans({ skip: 0, limit: PAGE_SIZE })
+    加载更多: getMyPlans({ skip: plans.value.length, limit: PAGE_SIZE })
+
+    hasMore 判断: returned.length === PAGE_SIZE → 可能还有更多
+                  returned.length < PAGE_SIZE → 没有更多
+
+  理由：
+    - 后端无 total 字段 → 方案 B (页码) 无法判断 lastPage
+    - skip=当前列表长度 天然避免重复（删除后可能漏一项，但概率低且可接受）
+    - 实现简单，不需要维护页码状态
+
+  不需要处理删除后补拉（过度设计）。
+
+  刷新时：
+    currentSkip = 0
+    plans.value = []（或新数据直接替换）
+
+
+7. 下拉刷新方案
+────────────────────────────────────────────────────────────────────────────────
+
+  当前页面结构：
+    - 使用 <scroll-view> 包裹列表内容
+    - pages.json 无 enablePullDownRefresh
+
+  问题：
+    - <scroll-view> 的 refresher-enabled 在小程序/H5/App 表现不一致
+    - enablePullDownRefresh + onPullDownRefresh 是 uni-app 标准模式
+      但需要页面使用原生滚动
+
+  推荐：移除 <scroll-view>，改用原生页面滚动。
+
+  变更：
+    a. pages.json 中 plan/list 增加 "enablePullDownRefresh": true
+    b. list.vue 中：
+       - 删除 <scroll-view class="plan-list" scroll-y> 和对应的 </scroll-view>
+       - 将列表容器改为 <view class="plan-list">
+       - 添加 onPullDownRefresh 回调（页面级生命周期）
+       - 添加 onReachBottom 回调（页面级生命周期）
+       - 刷新完成后调用 uni.stopPullDownRefresh()
+
+  跨端兼容：
+    - H5: enablePullDownRefresh → 浏览器原生下拉
+    - 微信小程序: enablePullDownRefresh → 小程序下拉
+    - Android App: enablePullDownRefresh → 原生下拉
+    三者均支持 onPullDownRefresh + uni.stopPullDownRefresh()
+
+  此变更同时解决"加载更多"的触发方式：onReachBottom 替代 @scrolltolower。
+
+
+8. 请求锁、竞态与去重
+────────────────────────────────────────────────────────────────────────────────
+
+  风险场景：
+    1. 刷新未完成时触底 → 互斥锁阻止
+    2. 加载更多未完成时再次触底 → 互斥锁阻止
+    3. 删除期间刷新 → 等待删除完成后刷新
+    4. 多次 onShow 同时触发请求 → 互斥锁 + 旧请求结果丢弃
+
+  推荐：boolean lock 方案（最小实现）
+
+  状态变量：
+    const isBusy = ref(false)  // 正在执行任何列表操作
+
+  规则：
+    - loadingInitial: isBusy=true
+    - refreshing: isBusy=true
+    - loadingMore: isBusy=true
+    - 以上三者互斥，同一时间只有一个为 true
+    - onShow 时如果 isBusy=true，跳过刷新
+
+  不做：
+    - request token（AbortController）
+    - 全局请求队列
+    - 结果版本号
+
+  理由：当前页面规模不需要复杂方案。布尔锁足够覆盖最常见竞态场景。
+
+
+9. DELETE 接口契约
+────────────────────────────────────────────────────────────────────────────────
+  来源：backend/app/api/travel.py:277-285
+
+  DELETE /api/travel/plans/{plan_id}
+    JWT: 是
+    权限: plan.user_id == current_user.id
+    成功: success(message="计划已删除") → { code:0, message:"...", data:null }
+    不存在: HTTPException(404, "计划不存在")
+    无权限: 同上（404，不暴露存在性）
+    重复删除: 404（计划已不存在）
+
+  request() 对 DELETE 的处理：
+    - statusCode 200 → code===0 → resolve(data) → data 为 null/undefined
+    - 但 request() 的 http.delete() 定义为：
+      delete<T>(url, params?) → request<T>(url, { method:'DELETE', data:params })
+    - 对于 deletePlan，T 应为 void，resolve 返回 undefined（可接受）
+
+  推荐前端签名：
+    export function deletePlan(id: number): Promise<void> {
+      return http.delete<void>(`/api/travel/plans/${id}`)
+    }
+
+
+10. 列表删除交互选择
+────────────────────────────────────────────────────────────────────────────────
+
+  决策：方案 A — 卡片内删除按钮
+
+  实现：
+    在 plan-card 内增加小删除按钮（"删除" 文本或 🗑 图标）
+    使用 @tap.stop 阻止事件冒泡到卡片点击
+
+  理由：
+    - 无需新依赖或组件
+    - 跨端行为一致（H5/App/小程序）
+    - 可发现性高
+    - 不与点击进入详情冲突（.stop 修饰符）
+
+  被否决：
+    方案 B（长按）：H5 行为不同，可发现性差
+    方案 C（左滑）：需要额外组件，跨端差异大
+
+  悲观删除流程：
+    1. 用户点击删除按钮
+    2. uni.showModal({ title:'确认删除', content:'...' })
+    3. 用户确认
+    4. 按钮显示 loading（或禁用）
+    5. 发送 DELETE 请求
+    6. 成功 → 从 plans 数组中移除该 plan
+    7. 失败 → Toast 错误信息，按钮恢复
+    8. 取消 → 无操作
+
+
+11. 详情页错误状态
+────────────────────────────────────────────────────────────────────────────────
+
+  当前状态（Task-1 后）：
+    isLoading=true → "加载中..."
+    plan && normalizedPlan → 渲染结构化内容
+    plan && hasFallbackMarkdown && plan.markdown → markdown 降级
+    !isLoading → "计划加载失败"
+
+  需要区分的状态：
+
+    errorType: 'none' | 'network' | 'notFound' | 'invalidPlanJson' | 'unknown'
+
+    - network: 网络错误/超时
+        显示 "网络请求失败" + 重试按钮
+    - notFound: 计划不存在（404）
+        显示 "计划不存在或已被删除" + 返回按钮
+        （可通过 catch 中检查 error.message 含 "404" 或 "不存在" 判断，
+         更好的方式是 request 层在 404 时抛出特定错误）
+    - invalidPlanJson: plan 记录存在但 plan_json 无效且无 markdown
+        显示 "计划内容暂不可用"（当前已接近此行为）
+    - markdown 可用（hasFallbackMarkdown=true）
+        显示降级内容（Task-1 已实现）
+
+  推荐方案：
+    新增 errorState ref: 'network' | 'notFound' | 'unknown' | null
+
+    catch 中根据 error.message 判断：
+      - 含 '不存在' → errorState='notFound'
+      - 其他 → errorState='network'
+
+    模板区分：
+      notFound: "计划不存在或已被删除" + "返回列表"按钮
+      network: "网络请求失败" + "重试"按钮
+
+  重试实现：
+    提取 loadPlan() 函数，onMounted 和重试按钮均调用它
+    重试前：isLoading=true, errorState=null, plan=null, normalizedPlan=null
+    连续点击：通过 isLoading 互斥
+
+
+12. 详情页重试方案
+────────────────────────────────────────────────────────────────────────────────
+
+  function loadPlan() {
+    isLoading.value = true
+    errorState.value = null
+    plan.value = null
+    normalizedPlan.value = null
+    hasFallbackMarkdown.value = false
+
+    getPlanDetail(planId.value)
+      .then(record => { /* normalize + set states */ })
+      .catch(err => { /* set errorState */ })
+      .finally(() => { isLoading.value = false })
+  }
+
+  onMounted → loadPlan()
+  重试按钮 @tap → loadPlan()
+
+  防重复：按钮在 isLoading=true 时 disabled
+
+
+13. 详情页删除方案
+────────────────────────────────────────────────────────────────────────────────
+
+  交互：
+    详情页底部增加危险操作区（红色边框/文字）
+    "删除计划" 按钮 → uni.showModal 二次确认 → DELETE 请求
+    成功 → uni.navigateBack() + Toast "已删除"
+    失败 → Toast 错误
+
+  navigateBack 可靠性：
+    - 从列表进入 → navigateBack 回到列表（列表 onShow 刷新）
+    - 直接链接进入（无上一页） → navigateBack 可能无反应
+      → fallback: uni.reLaunch({ url: '/pages/plan/list' })
+
+  判断是否有上一页：
+    const pages = getCurrentPages()
+    if (pages.length > 1) → uni.navigateBack()
+    else → uni.reLaunch('/pages/plan/list')
+
+  列表刷新：
+    列表页增加 onShow → loadPlans()（或标记 dirty）
+    详情页删除后 navigateBack，触发列表 onShow → 自动刷新
+
+
+14. 重新生成数据来源
+────────────────────────────────────────────────────────────────────────────────
+
+  PlanGenerateRequest 字段：
+    destination: string (必填)
+    days: number (必填)
+    budget?: number | null
+    travelers?: number (默认 1)
+    preferences?: string[]
+    start_date?: string | null
+    notes?: string | null
+
+  旧计划中可恢复的字段：
+    字段          来源                        是否可靠  是否预填
+    ─────────────────────────────────────────────────────────────
+    destination   plan.destination (字符串)    ✅        ✅
+    days          plan.days (number)           ✅        ✅
+    budget        plan.budget (number|string)  ✅        ✅（仅当非 null）
+    travelers     normalizedPlan.travelers     ✅        ✅（仅当存在且 >0）
+    preferences   不存储于 TravelPlan           ❌        ❌
+    start_date    不存储于 TravelPlan           ❌        ❌
+    notes         不存储于 TravelPlan           ❌        ❌
+
+  preferences/start_date/notes 未持久化在任何地方：
+    - TravelPlan 表无这些字段
+    - plan_json 的 StructuredTravelPlan 也无这些输入字段
+    - 这些是生成时的请求参数，不在数据库中
+    → 不可预填
+
+
+15. 重新生成参数传递方案
+────────────────────────────────────────────────────────────────────────────────
+
+  决策：方案 A — URL Query
+
+  detail.vue:
+    const dest = encodeURIComponent(plan.destination)
+    const d = plan.days
+    const b = plan.budget != null ? plan.budget : ''
+    const t = normalizedPlan?.travelers || ''
+    const url = `/pages/plan/generate?from=regenerate&dest=${dest}&days=${d}&budget=${b}&travelers=${t}`
+    uni.navigateTo({ url })
+
+  generate.vue (onLoad):
+    onLoad((options: any) => {
+      if (options?.from === 'regenerate') {
+        if (options.dest) destination.value = decodeURIComponent(options.dest)
+        if (options.days) days.value = Number(options.days) || 3
+        if (options.budget) budget.value = Number(options.budget) || undefined
+        if (options.travelers) travelers.value = Number(options.travelers) || 1
+        // 显示提示 "已预填原计划的出行信息，可修改后重新生成"
+      }
+    })
+
+  理由：
+    - 无新依赖
+    - 不引入 Plan Store
+    - 跨端兼容
+    - 参数长度可控（destination 通常 2-10 个中文字符）
+    - encodeURIComponent 处理中文/特殊字符
+    - 普通入口（无 from 参数）行为不变
+
+  不需要 from=regenerate 时显示明确提示。简单的预填已经传达了意图。
+
+
+16. 生成页预填方案
+────────────────────────────────────────────────────────────────────────────────
+
+  当前 generate.vue 使用 ref 声明表单状态，无 onLoad。
+
+  需要增加：
+    import { onLoad } from '@dcloudio/uni-app'
+
+    onLoad((options: any) => {
+      if (options?.dest) destination.value = decodeURIComponent(options.dest)
+      if (options?.days) days.value = Number(options.days) || 3
+      if (options?.budget && options.budget !== 'null' && options.budget !== '') {
+        const b = Number(options.budget)
+        if (!isNaN(b)) budget.value = b
+      }
+      if (options?.travelers) {
+        const t = Number(options.travelers)
+        if (t >= 1 && t <= 20) travelers.value = t
+      }
+    })
+
+  不修改：
+    - 表单 UI
+    - 校验逻辑
+    - 提交行为
+    - 生成成功后 redirectTo（仍跳转新计划详情）
+
+
+17. 列表刷新时机
+────────────────────────────────────────────────────────────────────────────────
+
+  决策：onShow 每次触发刷新
+
+  实现：
+    import { onShow } from '@dcloudio/uni-app'
+
+    onShow(() => {
+      refreshList()
+    })
+
+    refreshList():
+      skip = 0
+      isLoading = true（或 refreshing = true）
+      getMyPlans({ skip:0, limit:PAGE_SIZE })
+      plans = data
+      hasMore = data.length === PAGE_SIZE
+
+  场景覆盖：
+    1. 首次进入 → onMounted 触发首次加载 或 onShow（onShow 总是触发）
+    2. 从详情返回 → onShow → 刷新
+    3. 从生成页返回 → onShow → 刷新
+    4. 删除后 → navigateBack → 触发列表 onShow → 刷新
+    5. 下拉刷新 → onPullDownRefresh → refreshList + stopPullDownRefresh
+
+  不需要 dirty flag：
+    - 每次 onShow 都刷新数据量小（最多 20 条 × N 页）
+    - 后端排序保证数据一致
+    - 简单 > 聪明
+
+
+18. API 错误处理分工
+────────────────────────────────────────────────────────────────────────────────
+
+  当前 request() 行为：
+    - 自动解包 data（code===0 → resolve data）
+    - 401 → 全局跳转登录
+    - 422 → 解析 detail 数组
+    - 网络错误 → 友好中文 message
+    - 其他错误 → reject Error(message)
+
+  Task-2 应遵守的分工：
+    request 层：Token 注入、全局 401、网络错误转换
+    页面层：特定业务的 Toast、重试逻辑、UI 状态
+
+  规则：
+    - DELETE 成功: request 返回 void → 页面移除该项 + Toast "已删除"
+    - DELETE 404: request reject → 页面 catch + Toast "计划不存在" + 刷新列表
+    - GET 列表失败: 页面设置 error 状态 + 显示重试按钮（不 Toast）
+    - 加载更多失败: 页面 Toast 提示 + 保留旧数据
+
+  避免：
+    - request 层和页面层各弹一次 Toast
+    - 加载更多失败把整个列表换成错误页
+
+
+19. resource_id 点击任务边界
+────────────────────────────────────────────────────────────────────────────────
+
+  决策：方案 C — 全部 resource_id 点击跳转移至 Task-3
+
+  理由：
+    - /pages/resource/detail 不存在（Task-3 创建）
+    - utils/navigation.ts 不存在（Task-3 创建）
+    - Task-2 聚焦计划生命周期（CRUD+重试+重新生成）
+    - 不应创建指向不存在页面的链接
+    - Task-3 创建通用资源详情页时，同步接入 resource_id 跳转，职责内聚
+
+  Task-2 不实现任何 resource_id 点击跳转。
+
+
+20. pages.json 是否需要修改
+────────────────────────────────────────────────────────────────────────────────
+
+  需要修改：为 pages/plan/list 增加下拉刷新配置
+
+  当前 plan/list：
+    { "path":"pages/plan/list", "style":{ "navigationBarTitleText":"旅行计划", "navigationStyle":"custom" } }
+
+  修改为：
+    { "path":"pages/plan/list",
+      "style":{
+        "navigationBarTitleText":"旅行计划",
+        "navigationStyle":"custom",
+        "enablePullDownRefresh": true,
+        "backgroundColor": "#F5F5F5"
+      }
+    }
+
+  不影响其他页面。
+  H5/App/微信小程序均支持。
+
+  不需要修改其他路由。
+
+
+21. 是否需要新增组件
+────────────────────────────────────────────────────────────────────────────────
+
+  不需要新增任何组件。
+
+  - 列表卡片：保留当前 plan-card 结构，内联删除按钮
+  - 删除确认：使用 uni.showModal（内置 API）
+  - 错误状态：使用现有空状态样式 + 增加重试按钮
+  - 加载更多：列表底部简单文本指示器
+
+  不在 Task-2 中创建：
+    - PlanListCard
+    - PlanDeleteAction
+    - PlanErrorState
+    - ConfirmDialog
+    - LoadingMore
+
+  全部逻辑内联在页面中 — 这些组件只有一个调用方，不值得单独抽取。
+
+
+22. 是否需要 Plan Store
+────────────────────────────────────────────────────────────────────────────────
+
+  不需要。保持页面独立请求。
+
+  理由同上一次架构决策：
+    - 后端已持久化
+    - 列表/详情/生成是独立页面, onShow 自然刷新
+    - 无跨页面状态共享需求
+    - 无性能瓶颈
+
+
+23. 测试矩阵
+────────────────────────────────────────────────────────────────────────────────
+
+  23.1 列表分页
+    TC01 首次返回 20 条 → hasMore=true, 列表 20 项
+    TC02 首次返回 15 条 → hasMore=false
+    TC03 首次返回空数组 → 空状态（非错误）
+    TC04 首次网络失败 → 错误状态 + 重试按钮
+    TC05 触底加载第二页 → 列表追加，hasMore 根据第二页长度
+    TC06 触底加载返回空 → hasMore=false, 不再触发
+    TC07 连续快速触底 → 只有第一次触发（lock）
+    TC08 第二页含重复 ID → 正常（后端按 created_at DESC 保证）
+    TC09 下拉刷新 → 替换列表，reset skip
+    TC10 加载更多期间下拉刷新 → 忽略刷新（lock）
+
+  23.2 删除
+    TC11 列表取消确认 → 无操作
+    TC12 列表确认删除 → loading → 成功 → 移除该项
+    TC13 删除 404 → Toast "计划不存在" → 刷新列表
+    TC14 删除网络失败 → Toast 错误 → 保留该项
+    TC15 连续点击删除 → 第一次后按钮 disabled
+    TC16 删除最后一项 → hasMore 重新判断
+    TC17 详情删除 → 确认 → 成功 → navigateBack → 列表 onShow 刷新
+    TC18 详情删除（无上一页） → reLaunch 到列表
+
+  23.3 详情重试
+    TC19 首次加载失败 → 错误状态 + 重试
+    TC20 点击重试成功 → 正常渲染
+    TC21 重试再次失败 → 仍显示错误 + 重试按钮
+    TC22 连续点击重试 → 第一次后按钮 disabled
+    TC23 计划不存在(404) → "计划不存在或已被删除"
+    TC24 plan_json 无效 + markdown → markdown 降级
+
+  23.4 重新生成
+    TC25 destination 含中文 → encodeURIComponent + decodeURIComponent 正确
+    TC26 budget 为 number → 预填正确
+    TC27 budget 为 null → 不传 budget 参数
+    TC28 travelers 存在 → 预填
+    TC29 普通入口（无 from） → 默认值不变
+    TC30 生成后旧计划仍存在于列表
+
+
+24. Task-2 最终文件范围
+────────────────────────────────────────────────────────────────────────────────
+
+  修改 (5 个)：
+
+    1. frontend/src/api/travel.ts
+       → 新增 deletePlan(id): Promise<void>
+
+    2. frontend/src/pages/plan/list.vue
+       → 分页状态（skip, hasMore, refreshing, loadingMore, error）
+       → onShow 刷新
+       → onPullDownRefresh + onReachBottom
+       → 删除按钮 + uni.showModal
+       → 移除 <scroll-view>, 改为原生滚动
+       → 加载更多/刷新/错误 状态 UI
+
+    3. frontend/src/pages/plan/detail.vue
+       → 错误状态分类（network/notFound）
+       → 重试按钮
+       → 删除按钮 + 二次确认
+       → 重新生成按钮（预填参数跳转）
+       → loadPlan() 提取为复用函数
+
+    4. frontend/src/pages/plan/generate.vue
+       → onLoad 读取 URL 参数预填表单
+       → 不影响普通入口默认值
+
+    5. frontend/src/pages.json
+       → pages/plan/list 增加 enablePullDownRefresh + backgroundColor
+
+  不修改 (所有其他文件)：
+    - api/request.ts（无变化需要）
+    - api/ai.ts（generatePlan 已存在，无需修改）
+    - types/*（Task-1 已提供全部类型）
+    - utils/plan-normalizer.ts（Task-1 已完成）
+    - manifest.json
+    - package.json / package-lock.json
+    - 所有后端/AI 文件
+
+  不新建任何文件。
+
+
+25. 明确移出 Task-2 的内容
+────────────────────────────────────────────────────────────────────────────────
+  内容                          移入任务    理由
+  ─────────────────────────────────────────────────────────────────
+  resource_id 点击跳转           Task-3     通用详情页不存在
+  utils/navigation.ts            Task-3     无调用方
+  resource/detail 路由           Task-3     属于资源详情任务
+  Plan Store                     不实施     不需要
+  updatePlan API 封装            不实施     不需要编辑 plan_json
+
+
+26. 实施步骤
+────────────────────────────────────────────────────────────────────────────────
+  步骤  操作                            文件                      验证点
+  ───────────────────────────────────────────────────────────────────────────
+  1    pages.json 增加下拉刷新配置      pages.json               构建
+  2    api/travel.ts 新增 deletePlan    api/travel.ts            type-check
+  3    重构 list.vue：分页+刷新+删除    list.vue                  type-check + 构建
+       - 添加分页状态变量
+       - 替换 <scroll-view> 为原生滚动
+       - 实现 onShow/onPullDownRefresh/onReachBottom
+       - 实现 loadPlans/loadMore/refreshList
+       - 在卡片中添加删除按钮
+  4    修改 detail.vue：错误+重试+删除+重新生成  detail.vue       type-check + 构建
+       - 区分错误状态 (network/notFound)
+       - 提取 loadPlan()
+       - 添加重试按钮
+       - 添加删除按钮
+       - 添加重新生成按钮
+  5    修改 generate.vue：onLoad 预填   generate.vue             type-check + 构建
+  6    npm run type-check               全项目                   零错误
+  7    npm run build:h5                 全项目                   构建成功
+  8    npm run build:mp-weixin          全项目                   构建成功
+  9    检查 git diff                    全项目                   仅预期文件变化
+
+
+27. 验收标准
+────────────────────────────────────────────────────────────────────────────────
+  必须满足：
+    1.  vue-tsc --noEmit 零错误
+    2.  H5 构建通过
+    3.  mp-weixin 构建通过
+    4.  首次加载 limit=20（非 50）
+    5.  触底加载更多（onReachBottom）
+    6.  下拉刷新（onPullDownRefresh + stopPullDownRefresh）
+    7.  无重复 ID（skip=当前列表长度 保证）
+    8.  hasMore 基于返回长度 < PAGE_SIZE 判断
+    9.  空状态与网络错误状态区分
+    10. 列表删除：uni.showModal 二次确认
+    11. 删除成功后从列表移除 + Toast
+    12. 删除失败不丢失记录 + Toast 错误
+    13. 详情加载失败可重试（重试按钮）
+    14. 404 与普通网络错误区分
+    15. 详情删除：navigateBack + fallback reLaunch
+    16. 重新生成：URL Query 预填 destination/days/budget/travelers
+    17. 重新生成创建新计划（旧计划保留）
+    18. 生成页普通入口行为不变
+    19. 不接入 updatePlan
+    20. 不创建 Plan Store
+    21. 不创建 resource_id 跳转
+    22. 无新增文件
+    23. 无新增依赖
+    24. lockfile 不变
+    25. 后端/AI 不变
+
+
+28. 风险
+────────────────────────────────────────────────────────────────────────────────
+  R01  <scroll-view> 改为原生滚动后列表拉到底部可能无法触发 onReachBottom
+       缓解：uni-app 原生页面滚动 + onReachBottom 是标准模式，经过充分验证
+
+  R02  plan/detail 的 onLoad vs onMounted
+       当前使用 onMounted → 改为 onLoad 获取路由参数更可靠
+       但 Task-1 使用了 onMounted，改动需谨慎
+       缓解：保持 onMounted 不变（getCurrentPages 方式可工作）
+
+  R03  删除后 navigateBack 到列表，列表 onShow 刷新时仍在进行中
+       缓解：isBusy lock 已在 refreshList 开始时设置
+
+  R04  navigateBack 在某些平台（H5）可能没有上一页
+       缓解：已设计 fallback reLaunch
+
+
+29. 阻塞项
+────────────────────────────────────────────────────────────────────────────────
+  无阻塞项。Task-2 可立即实施。
+
+
+30. 最终结论
+────────────────────────────────────────────────────────────────────────────────
+  问题                                            答案
+  ───────────────────────────────────────────────────────────────────
+  Task-1 是否完整完成？                             是
+  Task-2 是否可以立即实施？                         是
+  计划列表使用哪种分页方案？                        skip/limit 追加
+  pageSize 是多少？                                 20
+  hasMore 如何判断？                               返回长度 === PAGE_SIZE → 可能更多
+  是否需要 pages.json 开启下拉刷新？               是（enablePullDownRefresh: true）
+  列表删除使用按钮、长按还是左滑？                  卡片内删除按钮（@tap.stop）
+  删除采用乐观还是悲观策略？                        悲观（等待后端成功再移除）
+  deletePlan 返回类型？                             Promise<void>
+  详情错误状态如何分类？                            network / notFound / markdown fallback
+  详情删除后如何返回列表？                          navigateBack + fallback reLaunch
+  重新生成预填哪些字段？                            destination, days, budget, travelers
+  是否使用 URL Query？                             是
+  是否保留旧计划？                                  是（生成新计划新 ID）
+  resource_id 点击是否移到 Task-3？                 是
+  是否需要 Plan Store？                             否
+  Task-2 最终修改哪些文件？                          5 个（api/travel.ts + list/detail/generate + pages.json）
+  是否可以生成 Task-2 实施提示词？                  是
+
+================================================================================
+  报告完成时间：2026-07-23
+  0 文件修改
+================================================================================
