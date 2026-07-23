@@ -32,6 +32,9 @@ class Settings(BaseSettings):
 
     OPENWEATHER_KEY: str = ""
 
+    # 高德地图 API
+    AMAP_KEY: str = ""
+
     # DeepSeek AI 配置
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
