@@ -1,4 +1,4 @@
-"""旅游资源 API：城市 / 景点 / 酒店 / 餐厅 / 旅行计划"""
+"""旅游资源 API：城市 / 景点 / 酒店 / 餐厅 / 娱乐 / 商场 / 旅行计划"""
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
@@ -11,6 +11,8 @@ from app.schemas.city import CityCreate, CityUpdate, CityResponse
 from app.schemas.scenic import ScenicSpotCreate, ScenicSpotUpdate, ScenicSpotResponse
 from app.schemas.hotel import HotelCreate, HotelUpdate, HotelResponse
 from app.schemas.restaurant import RestaurantCreate, RestaurantUpdate, RestaurantResponse
+from app.schemas.entertainment import EntertainmentCreate, EntertainmentUpdate, EntertainmentResponse
+from app.schemas.shopping_mall import ShoppingMallCreate, ShoppingMallUpdate, ShoppingMallResponse
 from app.schemas.travel import TravelPlanCreate, TravelPlanUpdate, TravelPlanResponse
 from app.services import travel_service
 from app.utils.response import success
@@ -228,6 +230,72 @@ def delete_restaurant(restaurant_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="餐厅不存在")
     travel_service.delete_restaurant(db, restaurant)
     return success(message="餐厅已删除")
+
+
+# ==================== Entertainment ====================
+
+@router.get("/entertainments", response_model=dict)
+def list_entertainments(
+    city_id: Optional[int] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """娱乐场所列表，支持按城市筛选"""
+    if city_id:
+        entertainments = travel_service.get_entertainments_by_city(db, city_id, skip=skip, limit=limit)
+    else:
+        entertainments = []
+    return success(data=[EntertainmentResponse.model_validate(e).model_dump() for e in entertainments])
+
+
+@router.get("/entertainments/{eid}", response_model=dict)
+def get_entertainment(eid: int, db: Session = Depends(get_db)):
+    """娱乐场所详情"""
+    e = travel_service.get_entertainment_by_id(db, eid)
+    if e is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="娱乐场所不存在")
+    return success(data=EntertainmentResponse.model_validate(e).model_dump())
+
+
+@router.post("/entertainments", response_model=dict)
+def create_entertainment(data: EntertainmentCreate, db: Session = Depends(get_db)):
+    """新增娱乐场所"""
+    e = travel_service.create_entertainment(db, **data.model_dump())
+    return success(data=EntertainmentResponse.model_validate(e).model_dump(), message="创建成功")
+
+
+# ==================== ShoppingMall ====================
+
+@router.get("/malls", response_model=dict)
+def list_malls(
+    city_id: Optional[int] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """商场列表，支持按城市筛选"""
+    if city_id:
+        malls = travel_service.get_malls_by_city(db, city_id, skip=skip, limit=limit)
+    else:
+        malls = []
+    return success(data=[ShoppingMallResponse.model_validate(m).model_dump() for m in malls])
+
+
+@router.get("/malls/{mid}", response_model=dict)
+def get_mall(mid: int, db: Session = Depends(get_db)):
+    """商场详情"""
+    m = travel_service.get_mall_by_id(db, mid)
+    if m is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="商场不存在")
+    return success(data=ShoppingMallResponse.model_validate(m).model_dump())
+
+
+@router.post("/malls", response_model=dict)
+def create_mall(data: ShoppingMallCreate, db: Session = Depends(get_db)):
+    """新增商场"""
+    m = travel_service.create_mall(db, **data.model_dump())
+    return success(data=ShoppingMallResponse.model_validate(m).model_dump(), message="创建成功")
 
 
 # ==================== TravelPlan ====================

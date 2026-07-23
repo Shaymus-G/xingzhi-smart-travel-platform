@@ -1,6 +1,7 @@
-"""旅游资源 Service：城市 / 景点 / 酒店 / 餐厅 / 旅行计划
+"""旅游资源 Service：城市 / 景点 / 酒店 / 餐厅 / 娱乐 / 商场 / 旅行计划
 
-P2 新增：城市名称查询、全部城市候选、Top-N 排序查询（NULL 排在最后）。
+P2 新增：城市名称查询、全部城市候选、Top-N 排序查询。
+P4 新增：娱乐场所、商场 CRUD + Top-N 查询。
 """
 from typing import Optional
 
@@ -11,6 +12,8 @@ from app.models.city import City
 from app.models.scenic import ScenicSpot
 from app.models.hotel import Hotel
 from app.models.restaurant import Restaurant
+from app.models.entertainment import Entertainment
+from app.models.shopping_mall import ShoppingMall
 from app.models.travel_plan import TravelPlan
 
 
@@ -264,4 +267,90 @@ def update_plan(db: Session, plan: TravelPlan, **kwargs) -> TravelPlan:
 
 def delete_plan(db: Session, plan: TravelPlan) -> None:
     db.delete(plan)
+    db.commit()
+
+
+# ==================== Entertainment ====================
+
+def get_entertainment_by_id(db: Session, eid: int) -> Optional[Entertainment]:
+    return db.scalar(select(Entertainment).where(Entertainment.id == eid))
+
+
+def get_entertainments_by_city(db: Session, city_id: int, skip: int = 0, limit: int = 20) -> list[Entertainment]:
+    stmt = select(Entertainment).where(Entertainment.city_id == city_id)
+    stmt = stmt.offset(skip).limit(limit).order_by(Entertainment.score.desc())
+    return list(db.scalars(stmt).all())
+
+
+def get_top_entertainments_by_city(db: Session, city_id: int, limit: int = 5) -> list[Entertainment]:
+    stmt = (
+        select(Entertainment).where(Entertainment.city_id == city_id)
+        .order_by(case((Entertainment.score.is_(None), 1), else_=0), desc(Entertainment.score))
+        .limit(limit)
+    )
+    return list(db.scalars(stmt).all())
+
+
+def create_entertainment(db: Session, **kwargs) -> Entertainment:
+    e = Entertainment(**kwargs)
+    db.add(e)
+    db.commit()
+    db.refresh(e)
+    return e
+
+
+def update_entertainment(db: Session, e: Entertainment, **kwargs) -> Entertainment:
+    for key, value in kwargs.items():
+        if value is not None and hasattr(e, key):
+            setattr(e, key, value)
+    db.commit()
+    db.refresh(e)
+    return e
+
+
+def delete_entertainment(db: Session, e: Entertainment) -> None:
+    db.delete(e)
+    db.commit()
+
+
+# ==================== ShoppingMall ====================
+
+def get_mall_by_id(db: Session, mid: int) -> Optional[ShoppingMall]:
+    return db.scalar(select(ShoppingMall).where(ShoppingMall.id == mid))
+
+
+def get_malls_by_city(db: Session, city_id: int, skip: int = 0, limit: int = 20) -> list[ShoppingMall]:
+    stmt = select(ShoppingMall).where(ShoppingMall.city_id == city_id)
+    stmt = stmt.offset(skip).limit(limit).order_by(ShoppingMall.score.desc())
+    return list(db.scalars(stmt).all())
+
+
+def get_top_malls_by_city(db: Session, city_id: int, limit: int = 5) -> list[ShoppingMall]:
+    stmt = (
+        select(ShoppingMall).where(ShoppingMall.city_id == city_id)
+        .order_by(case((ShoppingMall.score.is_(None), 1), else_=0), desc(ShoppingMall.score))
+        .limit(limit)
+    )
+    return list(db.scalars(stmt).all())
+
+
+def create_mall(db: Session, **kwargs) -> ShoppingMall:
+    m = ShoppingMall(**kwargs)
+    db.add(m)
+    db.commit()
+    db.refresh(m)
+    return m
+
+
+def update_mall(db: Session, m: ShoppingMall, **kwargs) -> ShoppingMall:
+    for key, value in kwargs.items():
+        if value is not None and hasattr(m, key):
+            setattr(m, key, value)
+    db.commit()
+    db.refresh(m)
+    return m
+
+
+def delete_mall(db: Session, m: ShoppingMall) -> None:
+    db.delete(m)
     db.commit()

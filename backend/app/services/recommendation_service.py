@@ -9,6 +9,8 @@ from app.models.review import Review
 from app.models.scenic import ScenicSpot
 from app.models.hotel import Hotel
 from app.models.restaurant import Restaurant
+from app.models.entertainment import Entertainment
+from app.models.shopping_mall import ShoppingMall
 
 
 # ==================== Favorite ====================
@@ -156,6 +158,14 @@ def _resolve_target(db: Session, target_type: str, target_id: int) -> tuple:
         elif target_type == "restaurant":
             row = db.execute(
                 select(Restaurant.name, Restaurant.image_url).where(Restaurant.id == target_id)
+            ).first()
+        elif target_type == "entertainment":
+            row = db.execute(
+                select(Entertainment.name, Entertainment.image_url).where(Entertainment.id == target_id)
+            ).first()
+        elif target_type == "shopping_mall":
+            row = db.execute(
+                select(ShoppingMall.name, ShoppingMall.image_url).where(ShoppingMall.id == target_id)
             ).first()
         else:
             return ("未知目标", None)
