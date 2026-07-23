@@ -18,6 +18,22 @@ from pydantic import BaseModel, Field, field_validator
 
 VALID_PERIODS = frozenset({"morning", "noon", "afternoon", "evening", "night"})
 VALID_RESOURCE_TYPES = frozenset({"scenic_spot", "restaurant", "hotel", "general_activity"})
+
+# 中英文时段映射（DeepSeek 有时输出中文）
+_PERIOD_MAP = {
+    "上午": "morning", "早上": "morning", "早晨": "morning",
+    "中午": "noon", "下午": "afternoon",
+    "傍晚": "evening", "晚上": "evening", "夜间": "night", "夜晚": "night",
+}
+
+# 中文资源类型映射
+_RESOURCE_TYPE_MAP = {
+    "景点": "scenic_spot", "景区": "scenic_spot", "风景区": "scenic_spot",
+    "餐厅": "restaurant", "饭店": "restaurant", "美食": "restaurant", "餐饮": "restaurant",
+    "酒店": "hotel", "住宿": "hotel", "宾馆": "hotel", "民宿": "hotel",
+    "活动": "general_activity", "其他": "general_activity",
+}
+
 MAX_TIPS = 10
 MAX_ASSUMPTIONS = 10
 MAX_TEXT_FIELD_LENGTH = 500
@@ -45,10 +61,10 @@ class BudgetBreakdown(BaseModel):
 
 
 class PlanBudget(BaseModel):
-    """预算信息"""
+    """预算信息（P3 放宽：所有字段可选，防止 DeepSeek 遗漏字段导致全盘失败）"""
     currency: str = Field(default="CNY", max_length=10)
     requested_total: Optional[float] = Field(default=None, ge=0, description="请求预算总额")
-    estimated_total: float = Field(..., ge=0, description="预估总费用")
+    estimated_total: float = Field(default=0, ge=0, description="预估总费用")
     breakdown: BudgetBreakdown = Field(default_factory=BudgetBreakdown)
 
     @field_validator("estimated_total")
@@ -76,6 +92,9 @@ class ItineraryItem(BaseModel):
     @field_validator("period")
     @classmethod
     def period_must_be_valid(cls, v: str) -> str:
+        # 自动将中文时段转换为英文
+        if v in _PERIOD_MAP:
+            return _PERIOD_MAP[v]
         if v not in VALID_PERIODS:
             raise ValueError(f"无效时段: {v}，必须是 {sorted(VALID_PERIODS)} 之一")
         return v
@@ -83,6 +102,9 @@ class ItineraryItem(BaseModel):
     @field_validator("resource_type")
     @classmethod
     def resource_type_must_be_valid(cls, v: str) -> str:
+        # 自动将中文资源类型转换为英文
+        if v in _RESOURCE_TYPE_MAP:
+            return _RESOURCE_TYPE_MAP[v]
         if v not in VALID_RESOURCE_TYPES:
             raise ValueError(f"无效资源类型: {v}，必须是 {sorted(VALID_RESOURCE_TYPES)} 之一")
         return v
@@ -144,21 +166,19 @@ class StructuredTravelPlan(BaseModel):
     @field_validator("itinerary")
     @classmethod
     def itinerary_length_matches_days(cls, v: list[DayPlan], info) -> list[DayPlan]:
-        """行程天数必须与 days 字段一致"""
+        """行程天数与 days 不一致时，截断或保留（不拒绝）"""
         days = info.data.get("days")
-        if days is not None and len(v) != days:
-            raise ValueError(f"itinerary 长度 ({len(v)}) 与 days ({days}) 不一致")
+        if days is not None and len(v) > days:
+            # DeepSeek 有时多生成天数，截断到请求天数
+            return v[:days]
         return v
 
     @field_validator("itinerary")
     @classmethod
     def day_numbers_must_be_sequential(cls, v: list[DayPlan]) -> list[DayPlan]:
-        """day 编号必须从 1 连续递增"""
+        """day 编号自动修正为从 1 连续递增"""
         for i, day_plan in enumerate(v, 1):
-            if day_plan.day != i:
-                raise ValueError(
-                    f"day 编号不连续: 期望第 {i} 天为 {i}，实际为 {day_plan.day}"
-                )
+            day_plan.day = i
         return v
 
     def get_all_resource_ids(self) -> dict[str, set[int]]:

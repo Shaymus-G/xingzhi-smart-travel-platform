@@ -282,12 +282,6 @@ onUnload(() => {
   <view class="chat-page">
     <NavBar title="AI 助手" />
 
-    <!-- 计划生成入口 -->
-    <view class="plan-entry" @tap="goToGeneratePlan">
-      <text class="plan-entry-icon">📋</text>
-      <text>生成完整行程</text>
-    </view>
-
     <!-- 消息列表 -->
     <scroll-view
       class="chat-list"
@@ -381,25 +375,6 @@ onUnload(() => {
   display: flex;
   flex-direction: column;
   background: #f5f5f5;
-}
-
-.plan-entry {
-  margin: 12rpx 32rpx;
-  padding: 16rpx 24rpx;
-  background: #fff;
-  border: 2rpx solid #4A90D9;
-  border-radius: 16rpx;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8rpx;
-  font-size: 26rpx;
-  color: #4A90D9;
-  font-weight: 600;
-}
-
-.plan-entry-icon {
-  font-size: 32rpx;
 }
 
 .chat-list {

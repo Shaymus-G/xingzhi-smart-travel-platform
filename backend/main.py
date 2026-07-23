@@ -14,9 +14,6 @@ from app.core.config import settings
 app = FastAPI(
     title=settings.APP_NAME,
     debug=settings.DEBUG,
-    # 生产环境关闭调试信息泄露
-    docs_url="/docs" if settings.DEBUG else None,
-    redoc_url=None,
 )
 
 # ==================== 安全中间件（按顺序加载） ====================

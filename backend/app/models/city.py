@@ -38,6 +38,8 @@ class City(BaseModel):
     scenic_spots: Mapped[List["ScenicSpot"]] = relationship(back_populates="city")
     hotels: Mapped[List["Hotel"]] = relationship(back_populates="city")
     restaurants: Mapped[List["Restaurant"]] = relationship(back_populates="city")
+    entertainments: Mapped[List["Entertainment"]] = relationship(back_populates="city")
+    shopping_malls: Mapped[List["ShoppingMall"]] = relationship(back_populates="city")
 
     def __repr__(self) -> str:
         return f"<City(id={self.id}, name={self.name})>"

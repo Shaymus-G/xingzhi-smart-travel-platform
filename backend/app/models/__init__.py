@@ -17,6 +17,8 @@ from app.models.review import Review
 from app.models.travel_plan import TravelPlan
 from app.models.preference import UserPreference
 from app.models.ai_session import AISession
+from app.models.entertainment import Entertainment
+from app.models.shopping_mall import ShoppingMall
 
 __all__ = [
     "BaseModel",
