@@ -69,6 +69,42 @@ export interface Restaurant {
   image_url?: string | null
 }
 
+// ==================== Entertainment ====================
+
+/** 娱乐场所 */
+export interface Entertainment {
+  id: number
+  city_id: number
+  name: string
+  description: string | null
+  address: string | null
+  category: string | null
+  score: number | null
+  price: number | null
+  open_time: string | null
+  latitude: number | null
+  longitude: number | null
+  image_url: string | null
+}
+
+// ==================== ShoppingMall ====================
+
+/** 商场 */
+export interface ShoppingMall {
+  id: number
+  city_id: number
+  name: string
+  description: string | null
+  address: string | null
+  category: string | null
+  score: number | null
+  price: number | null
+  open_time: string | null
+  latitude: number | null
+  longitude: number | null
+  image_url: string | null
+}
+
 // ==================== TravelPlan ====================
 
 export interface TravelPlan {
@@ -78,7 +114,7 @@ export interface TravelPlan {
   destination: string
   days: number
   budget: number | string | null
-  plan_json: Record<string, unknown> | null
+  plan_json: unknown | null
   markdown: string | null
   created_at: string
   updated_at: string

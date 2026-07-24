@@ -238,6 +238,8 @@ def _resource_type_label(rt: str) -> str:
         "scenic_spot": "景点",
         "restaurant": "餐厅",
         "hotel": "酒店",
+        "entertainment": "娱乐",
+        "shopping_mall": "商场",
         "general_activity": "活动",
     }
     return labels.get(rt, rt)

@@ -193,6 +193,29 @@ def _orm_restaurant_to_dict(restaurant) -> dict:
     }
 
 
+def _orm_entertainment_to_dict(ent) -> dict:
+    """Entertainment ORM → 普通 dict（含 ID 供 P3 计划引用）"""
+    return {
+        "id": ent.id,
+        "name": ent.name,
+        "category": getattr(ent, "category", "") or "",
+        "score": float(ent.score) if getattr(ent, "score", None) is not None else None,
+        "price": float(ent.price) if getattr(ent, "price", None) is not None else None,
+        "open_time": getattr(ent, "open_time", "") or "",
+    }
+
+
+def _orm_mall_to_dict(mall) -> dict:
+    """ShoppingMall ORM → 普通 dict（含 ID 供 P3 计划引用）"""
+    return {
+        "id": mall.id,
+        "name": mall.name,
+        "category": getattr(mall, "category", "") or "",
+        "score": float(mall.score) if getattr(mall, "score", None) is not None else None,
+        "open_time": getattr(mall, "open_time", "") or "",
+    }
+
+
 def _orm_preference_to_dict(pref) -> dict:
     """UserPreference ORM → 普通 dict"""
     return {

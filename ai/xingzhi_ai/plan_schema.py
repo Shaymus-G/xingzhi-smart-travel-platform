@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field, field_validator
 # ==================== 常量 ====================
 
 VALID_PERIODS = frozenset({"morning", "noon", "afternoon", "evening", "night"})
-VALID_RESOURCE_TYPES = frozenset({"scenic_spot", "restaurant", "hotel", "general_activity"})
+VALID_RESOURCE_TYPES = frozenset({"scenic_spot", "restaurant", "hotel", "general_activity", "entertainment", "shopping_mall"})
 
 # 中英文时段映射（DeepSeek 有时输出中文）
 _PERIOD_MAP = {
@@ -32,6 +32,8 @@ _RESOURCE_TYPE_MAP = {
     "餐厅": "restaurant", "饭店": "restaurant", "美食": "restaurant", "餐饮": "restaurant",
     "酒店": "hotel", "住宿": "hotel", "宾馆": "hotel", "民宿": "hotel",
     "活动": "general_activity", "其他": "general_activity",
+    "娱乐": "entertainment", "娱乐场所": "entertainment", "KTV": "entertainment", "电影院": "entertainment",
+    "商场": "shopping_mall", "购物": "shopping_mall", "购物中心": "shopping_mall", "百货": "shopping_mall",
 }
 
 MAX_TIPS = 10
@@ -152,7 +154,7 @@ class StructuredTravelPlan(BaseModel):
     - plan_renderer 的输入
     """
 
-    schema_version: str = Field(default="1.0", max_length=10, description="Schema 版本")
+    schema_version: str = Field(default="1.1", max_length=10, description="Schema 版本")
     title: str = Field(..., min_length=1, max_length=200, description="计划标题")
     destination: PlanDestination = Field(..., description="目的地信息")
     days: int = Field(..., ge=1, le=10, description="旅行天数")
@@ -187,6 +189,8 @@ class StructuredTravelPlan(BaseModel):
             "scenic_spot": set(),
             "restaurant": set(),
             "hotel": set(),
+            "entertainment": set(),
+            "shopping_mall": set(),
         }
         for day_plan in self.itinerary:
             for item in day_plan.items:

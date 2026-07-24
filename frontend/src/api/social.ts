@@ -9,6 +9,7 @@ import type {
   Review,
   CreateReviewParams,
   UpdateReviewParams,
+  MyReview,
 } from '@/types/social'
 
 // ==================== Favorite ====================
@@ -48,6 +49,11 @@ export function createReview(data: CreateReviewParams): Promise<Review> {
 /** 更新评论 */
 export function updateReview(id: number, data: UpdateReviewParams): Promise<Review> {
   return http.put<Review>(`/api/social/reviews/${id}`, toBody(data))
+}
+
+/** 我的评论列表 */
+export function getMyReviews(params?: { skip?: number; limit?: number }): Promise<MyReview[]> {
+  return http.get<MyReview[]>('/api/social/reviews/mine', params)
 }
 
 /** 删除评论 */

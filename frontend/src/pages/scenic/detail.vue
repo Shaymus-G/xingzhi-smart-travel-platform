@@ -7,16 +7,10 @@ import { onLoad, onShow, onReady } from '@dcloudio/uni-app'
 import NavBar from '@/components/NavBar.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import Loading from '@/components/Loading.vue'
-import ReviewItem from '@/components/ReviewItem.vue'
+import ResourceSocialSection from '@/components/ResourceSocialSection.vue'
 import { getScenicDetail } from '@/api/travel'
-import { getFavorites, addFavorite, deleteFavorite } from '@/api/social'
-import { getReviews, createReview } from '@/api/social'
-import { useUserStore } from '@/stores/user'
 import SafeImage from '@/components/SafeImage.vue'
 import type { ScenicSpot } from '@/types/travel'
-import type { Review } from '@/types/social'
-
-const userStore = useUserStore()
 
 // ========== 路由 ==========
 const scenicId = ref(0)
@@ -24,21 +18,6 @@ const scenicId = ref(0)
 // ========== 景点数据 ==========
 const scenic = ref<ScenicSpot | null>(null)
 const loading = ref(false)
-
-// ========== 收藏 ==========
-const isFavorited = ref(false)
-const currentFavoriteId = ref<number | null>(null)
-const favoriteLoading = ref(false)
-
-// ========== 评论 ==========
-const reviews = ref<Review[]>([])
-const reviewsLoading = ref(false)
-
-// ========== 发表评论 ==========
-const reviewContent = ref('')
-const reviewScore = ref(5)
-const reviewSubmitting = ref(false)
-
 
 // ========== tags 解析 ==========
 const parsedTags = computed<string[]>(() => {
@@ -76,109 +55,6 @@ async function loadScenic() {
   }
 }
 
-// ========== 收藏逻辑 ==========
-async function loadFavoriteStatus() {
-  if (!userStore.isLoggedIn) return
-  try {
-    const favs = await getFavorites()
-    const found = favs.find(
-      f => f.target_type === 'scenic_spot' && f.target_id === scenicId.value
-    )
-    if (found) {
-      isFavorited.value = true
-      currentFavoriteId.value = found.id
-    } else {
-      isFavorited.value = false
-      currentFavoriteId.value = null
-    }
-  } catch {
-    // 静默失败，不影响页面展示
-  }
-}
-
-async function toggleFavorite() {
-  if (!userStore.isLoggedIn) {
-    uni.showToast({ title: '请先登录', icon: 'none' })
-    uni.navigateTo({ url: '/pages/auth/login' })
-    return
-  }
-
-  favoriteLoading.value = true
-  try {
-    if (isFavorited.value && currentFavoriteId.value) {
-      await deleteFavorite(currentFavoriteId.value)
-      isFavorited.value = false
-      currentFavoriteId.value = null
-      uni.showToast({ title: '已取消收藏', icon: 'success' })
-    } else {
-      const fav = await addFavorite({
-        target_type: 'scenic_spot',
-        target_id: scenicId.value,
-      })
-      isFavorited.value = true
-      currentFavoriteId.value = fav.id
-      uni.showToast({ title: '收藏成功', icon: 'success' })
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : '操作失败'
-    uni.showToast({ title: msg, icon: 'none' })
-  } finally {
-    favoriteLoading.value = false
-  }
-}
-
-// ========== 评论逻辑 ==========
-async function loadReviews() {
-  reviewsLoading.value = true
-  try {
-    const data = await getReviews({
-      target_type: 'scenic_spot',
-      target_id: scenicId.value,
-    })
-    reviews.value = data || []
-  } catch {
-    // 静默失败
-  } finally {
-    reviewsLoading.value = false
-  }
-}
-
-function goLogin() {
-  uni.navigateTo({ url: '/pages/auth/login' })
-}
-
-async function submitReview() {
-  const content = reviewContent.value.trim()
-  if (!content) {
-    uni.showToast({ title: '请输入评论内容', icon: 'none' })
-    return
-  }
-  if (reviewScore.value < 1 || reviewScore.value > 5) {
-    uni.showToast({ title: '评分需在1-5之间', icon: 'none' })
-    return
-  }
-
-  reviewSubmitting.value = true
-  try {
-    const newReview = await createReview({
-      target_type: 'scenic_spot',
-      target_id: scenicId.value,
-      content,
-      score: reviewScore.value,
-    })
-    // 插入到列表顶部
-    reviews.value.unshift(newReview)
-    reviewContent.value = ''
-    reviewScore.value = 5
-    uni.showToast({ title: '评论成功', icon: 'success' })
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : '评论失败'
-    uni.showToast({ title: msg, icon: 'none' })
-  } finally {
-    reviewSubmitting.value = false
-  }
-}
-
 // ========== 生命周期 ==========
 onLoad((options: any) => {
   console.log('[scenic/detail] onLoad options:', JSON.stringify(options))
@@ -189,9 +65,7 @@ onLoad((options: any) => {
     return
   }
   scenicId.value = id
-  Promise.all([loadScenic(), loadReviews()]).then(() => {
-    loadFavoriteStatus()
-  })
+  loadScenic()
 })
 
 onShow(() => {
@@ -219,10 +93,6 @@ onReady(() => {
         <view class="scenic-info">
           <view class="scenic-header">
             <text class="scenic-name">{{ scenic.name }}</text>
-            <view class="scenic-favorite" @tap="toggleFavorite">
-              <text v-if="favoriteLoading">⏳</text>
-              <text v-else>{{ isFavorited ? '❤️' : '🤍' }}</text>
-            </view>
           </view>
 
           <view v-if="parsedTags.length > 0" class="scenic-tags">
@@ -240,74 +110,12 @@ onReady(() => {
           <text v-if="scenic.description" class="scenic-desc">{{ scenic.description }}</text>
         </view>
 
-        <!-- 评论区域 -->
-        <view class="scenic-section">
-          <text class="scenic-section-title">游客评论 ({{ reviews.length }})</text>
-
-          <Loading :visible="reviewsLoading" text="加载评论..." />
-
-          <template v-if="!reviewsLoading">
-            <EmptyState
-              v-if="reviews.length === 0"
-              text="暂无评论"
-              sub-text="来发表第一条评论吧"
-            />
-
-            <ReviewItem
-              v-for="review in reviews"
-              :key="review.id"
-              :review="review"
-            />
-          </template>
-        </view>
-
-        <!-- 发表评论 -->
-        <view class="scenic-section">
-          <text class="scenic-section-title">发表评论</text>
-
-          <template v-if="userStore.isLoggedIn">
-            <view class="review-editor">
-              <view class="review-editor-score">
-                <text class="review-editor-label">评分</text>
-                <view class="review-editor-stars">
-                  <text
-                    v-for="s in 5"
-                    :key="s"
-                    class="review-editor-star"
-                    :class="{ active: s <= reviewScore }"
-                    @tap="reviewScore = s"
-                  >
-                    {{ s <= reviewScore ? '★' : '☆' }}
-                  </text>
-                </view>
-              </view>
-
-              <textarea
-                v-model="reviewContent"
-                class="review-editor-textarea"
-                placeholder="写下你的感受吧..."
-                placeholder-style="color: #ccc;"
-                :maxlength="500"
-              />
-
-              <button
-                class="review-editor-btn"
-                :loading="reviewSubmitting"
-                :disabled="reviewSubmitting || !reviewContent.trim()"
-                @tap="submitReview"
-              >
-                提交评论
-              </button>
-            </view>
-          </template>
-
-          <template v-else>
-            <view class="review-login-tip">
-              <text class="review-login-text">登录后发表评论</text>
-              <button class="review-login-btn" @tap="goLogin">去登录</button>
-            </view>
-          </template>
-        </view>
+        <!-- 收藏评论 -->
+        <ResourceSocialSection
+          v-if="scenic && scenicId > 0"
+          target-type="scenic_spot"
+          :target-id="scenicId"
+        />
       </template>
 
       <EmptyState

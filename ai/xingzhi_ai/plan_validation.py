@@ -50,6 +50,8 @@ def validate_plan_resources(
     scenic_candidates: dict[int, dict],
     hotel_candidates: dict[int, dict],
     restaurant_candidates: dict[int, dict],
+    entertainment_candidates: dict[int, dict] | None = None,
+    mall_candidates: dict[int, dict] | None = None,
 ) -> ValidationResult:
     """验证旅行计划中的资源引用。
 
@@ -132,7 +134,7 @@ def validate_plan_resources(
 
             # 验证 resource_id 与 name 匹配
             if rid and not errors:
-                candidate = _get_candidate(rt, rid, scenic_candidates, hotel_candidates, restaurant_candidates)
+                candidate = _get_candidate(rt, rid, scenic_candidates, hotel_candidates, restaurant_candidates, entertainment_candidates, mall_candidates)
                 if candidate and item.name != candidate.get("name", ""):
                     warnings.append(
                         f"Day {day_num}: 名称标准化 '{item.name}' → '{candidate['name']}'"
@@ -235,6 +237,8 @@ def _get_candidate(
     scenics: dict[int, dict],
     hotels: dict[int, dict],
     restaurants: dict[int, dict],
+    entertainments: dict[int, dict] | None = None,
+    malls: dict[int, dict] | None = None,
 ) -> Optional[dict]:
     """获取候选资源"""
     if resource_type == "scenic_spot":
@@ -243,6 +247,10 @@ def _get_candidate(
         return hotels.get(resource_id)
     elif resource_type == "restaurant":
         return restaurants.get(resource_id)
+    elif resource_type == "entertainment":
+        return entertainments.get(resource_id) if entertainments else None
+    elif resource_type == "shopping_mall":
+        return malls.get(resource_id) if malls else None
     return None
 
 

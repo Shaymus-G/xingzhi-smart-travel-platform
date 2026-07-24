@@ -66,17 +66,7 @@ let navigating = false
 function resetNavigating() {
   setTimeout(() => {
     navigating = false
-    console.log('[home] navigation lock released')
   }, 800)
-}
-
-function logPageStack(stage: string) {
-  try {
-    const pages = getCurrentPages()
-    console.log(`[home] page stack ${stage}:`, pages.map((p: any) => p.route))
-  } catch (err) {
-    console.warn('[home] getCurrentPages failed:', err)
-  }
 }
 
 function goCityDetail(id: number | string) {
@@ -87,21 +77,16 @@ function goCityDetail(id: number | string) {
   }
 
   if (navigating) {
-    console.log('[home] navigation locked, ignore city tap:', cityId)
     return
   }
   navigating = true
 
   const primaryUrl = `/pages/city/detail?id=${cityId}`
   const fallbackUrl = `pages/city/detail?id=${cityId}`
-  console.log('[home] goCityDetail:', cityId, 'primaryUrl:', primaryUrl)
-  logPageStack('before city navigateTo')
 
   uni.navigateTo({
     url: primaryUrl,
-    success(res) {
-      console.log('[home] navigate city/detail success:', JSON.stringify(res))
-      logPageStack('after city navigateTo success')
+    success(_res) {
     },
     fail(err) {
       console.error('[home] navigate city/detail primary failed:', JSON.stringify(err))
@@ -136,21 +121,16 @@ function goScenicDetail(id: number | string) {
   }
 
   if (navigating) {
-    console.log('[home] navigation locked, ignore scenic tap:', scenicId)
     return
   }
   navigating = true
 
   const primaryUrl = `/pages/scenic/detail?id=${scenicId}`
   const fallbackUrl = `pages/scenic/detail?id=${scenicId}`
-  console.log('[home] goScenicDetail:', scenicId, 'primaryUrl:', primaryUrl)
-  logPageStack('before scenic navigateTo')
 
   uni.navigateTo({
     url: primaryUrl,
-    success(res) {
-      console.log('[home] navigate scenic/detail success:', JSON.stringify(res))
-      logPageStack('after scenic navigateTo success')
+    success(_res) {
     },
     fail(err) {
       console.error('[home] navigate scenic/detail primary failed:', JSON.stringify(err))
