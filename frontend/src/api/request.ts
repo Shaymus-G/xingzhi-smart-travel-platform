@@ -71,13 +71,44 @@ export async function request<T = unknown>(
   }
 
   return new Promise((resolve, reject) => {
+    const reqTimeout = options.timeout || TIMEOUT
+    let _settled = false
+
+    const settleReject = (err: Error) => {
+      if (_settled) return
+      _settled = true
+      clearTimeout(timer)
+      reject(err)
+    }
+
+    const settleResolve = (value: T) => {
+      if (_settled) return
+      _settled = true
+      clearTimeout(timer)
+      resolve(value)
+    }
+
+    // JS 级超时保护：uni.request 的 timeout 在 H5 模式下可能不生效，
+    // 当后端不可达时 Promise 会永久 pending，导致页面 loading 永不结束。
+    const timer = setTimeout(() => {
+      if (_settled) return
+      if (import.meta.env.DEV) {
+        console.warn('[request] JS timeout guard fired', {
+          url: `${baseUrl}${url}`,
+          timeout: reqTimeout,
+        })
+      }
+      settleReject(new Error('请求超时，请稍后重试'))
+    }, reqTimeout)
+
     uni.request({
       url: `${baseUrl}${url}`,
       method: options.method || 'GET',
       data: options.data,
       header,
-      timeout: options.timeout || TIMEOUT,
+      timeout: reqTimeout,
       success(res) {
+        clearTimeout(timer)
         const statusCode = res.statusCode
         const body = res.data as Record<string, unknown>
 
@@ -92,7 +123,7 @@ export async function request<T = unknown>(
               complete: () => { _authRedirecting = false },
             })
           }
-          reject(new Error('登录已过期，请重新登录'))
+          settleReject(new Error('登录已过期，请重新登录'))
           return
         }
 
@@ -102,33 +133,34 @@ export async function request<T = unknown>(
           const msg = Array.isArray(detail)
             ? detail.map((d: Record<string, unknown>) => d.msg || '').join('; ')
             : String(detail)
-          reject(new Error(msg || '请求参数错误'))
+          settleReject(new Error(msg || '请求参数错误'))
           return
         }
 
         // 业务成功（code === 0）
         if ((statusCode === 200 || statusCode === 201) && body?.code === 0) {
-          resolve(body.data as T)
+          settleResolve(body.data as T)
           return
         }
 
         // 业务失败（code !== 0）
         if (body?.code !== undefined && body.code !== 0) {
-          reject(new Error((body.message as string) || '请求失败'))
+          settleReject(new Error((body.message as string) || '请求失败'))
           return
         }
 
         // HTTP 错误状态码
         if (statusCode && statusCode >= 400) {
           const detail = body?.detail as string | undefined
-          reject(new Error(detail || `请求失败 (${statusCode})`))
+          settleReject(new Error(detail || `请求失败 (${statusCode})`))
           return
         }
 
         // 兜底：非标准响应格式
-        resolve(body as unknown as T)
+        settleResolve(body as unknown as T)
       },
       fail(err) {
+        clearTimeout(timer)
         // 开发环境：输出诊断信息（不含敏感数据）
         if (import.meta.env.DEV) {
           console.error('[request] network failure', {
@@ -149,7 +181,7 @@ export async function request<T = unknown>(
           message = rawMsg || '网络异常，请检查网络连接'
         }
 
-        reject(new Error(message))
+        settleReject(new Error(message))
       },
     })
   })

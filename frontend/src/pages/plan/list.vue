@@ -13,20 +13,25 @@ const PAGE_SIZE = 20
 
 // ========== 列表状态 ==========
 const plans = ref<TravelPlan[]>([])
-const isInitialLoading = ref(true)
+const isInitialLoading = ref(true)     // 初始显示加载中；注意：isInitialLoading 不在 isListBusy 中
 const isRefreshing = ref(false)
 const isLoadingMore = ref(false)
 const hasMore = ref(true)
 const loadError = ref<string | null>(null)
 const deletingIds = ref<Set<number>>(new Set())
 
+// isListBusy 只包含真正的"请求进行中"状态，不包含 isInitialLoading
+// （isInitialLoading 在 refreshPlans 内部设置，如果放入 isListBusy 会导致首次调用被拦截）
 const isListBusy = computed(
-  () => isInitialLoading.value || isRefreshing.value || isLoadingMore.value,
+  () => isRefreshing.value || isLoadingMore.value,
 )
 
 // ========== 生命周期 ==========
 
 onShow(() => {
+  if (import.meta.env.DEV) {
+    console.log('[plan-list] onShow', { isInitialLoading: isInitialLoading.value, isListBusy: isListBusy.value, plansLen: plans.value.length })
+  }
   void refreshPlans('show')
 })
 
@@ -41,10 +46,17 @@ onReachBottom(() => {
 // ========== 数据加载 ==========
 
 async function refreshPlans(source: 'show' | 'pull-down' | 'retry'): Promise<void> {
-  // 列表请求互斥
+  // 列表请求互斥（isRefreshing / isLoadingMore，不含 isInitialLoading）
   if (isListBusy.value) {
+    if (import.meta.env.DEV) {
+      console.log('[plan-list] refreshPlans blocked by isListBusy', { source })
+    }
     if (source === 'pull-down') uni.stopPullDownRefresh()
     return
+  }
+
+  if (import.meta.env.DEV) {
+    console.log('[plan-list] refreshPlans executing', { source })
   }
 
   if (plans.value.length === 0) {

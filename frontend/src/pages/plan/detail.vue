@@ -2,7 +2,8 @@
 /**
  * 旅行计划详情页面 — 使用 normalizer 安全渲染 plan_json
  */
-import { ref, onMounted } from 'vue'
+import { ref } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
 import NavBar from '@/components/NavBar.vue'
 import { getPlanDetail, deletePlan } from '@/api/travel'
 import type { TravelPlan } from '@/types/travel'
@@ -33,23 +34,53 @@ const planId = ref(0)
 const hasFallbackMarkdown = ref(false)
 const loadError = ref<PlanLoadError | null>(null)
 const isDeleting = ref(false)
-let _loading = false // 并发锁
+let _loading = false   // 并发锁
+let _loadSeq = 0       // 请求序号（诊断用）
 
 // ========== 生命周期 ==========
-onMounted(() => {
-  const pages = getCurrentPages()
-  const currentPage = pages[pages.length - 1] as any
-  planId.value = Number(currentPage?.options?.id) || 0
+onLoad((options: Record<string, string> | undefined) => {
+  if (import.meta.env.DEV) {
+    console.log('[plan-detail] onLoad fired', { options, timestamp: Date.now() })
+  }
+  const rawId = options?.id
+  const idNum = Number(rawId)
+  if (!rawId || !Number.isFinite(idNum) || !Number.isInteger(idNum) || idNum <= 0) {
+    if (import.meta.env.DEV) {
+      console.warn('[plan-detail] invalid planId', { rawId, idNum })
+    }
+    loadError.value = 'invalidId'
+    isLoading.value = false
+    return
+  }
+  planId.value = idNum
+  if (import.meta.env.DEV) {
+    console.log('[plan-detail] planId set, calling loadPlan', { planId: idNum })
+  }
   void loadPlan()
 })
 
 // ========== 数据加载 ==========
 
 async function loadPlan(): Promise<void> {
-  if (_loading) return
+  const seq = ++_loadSeq
+  const t0 = Date.now()
+
+  if (import.meta.env.DEV) {
+    console.log(`[plan-detail] loadPlan#${seq} enter`, { _loading, planId: planId.value, t0 })
+  }
+
+  if (_loading) {
+    if (import.meta.env.DEV) {
+      console.warn(`[plan-detail] loadPlan#${seq} blocked by _loading lock`)
+    }
+    return
+  }
   if (planId.value <= 0) {
     loadError.value = 'invalidId'
     isLoading.value = false
+    if (import.meta.env.DEV) {
+      console.warn(`[plan-detail] loadPlan#${seq} planId <= 0, aborted`)
+    }
     return
   }
 
@@ -61,11 +92,34 @@ async function loadPlan(): Promise<void> {
   hasFallbackMarkdown.value = false
 
   try {
+    if (import.meta.env.DEV) {
+      console.log(`[plan-detail] loadPlan#${seq} calling getPlanDetail(${planId.value})`)
+    }
+    const t1 = Date.now()
     plan.value = await getPlanDetail(planId.value)
+    if (import.meta.env.DEV) {
+      console.log(`[plan-detail] loadPlan#${seq} getPlanDetail resolved`, {
+        elapsed: Date.now() - t1,
+        hasPlan: plan.value != null,
+        hasPlanJson: plan.value?.plan_json != null,
+        hasMarkdown: plan.value?.markdown != null,
+      })
+    }
 
     // 通过 normalizer 安全获取结构化数据
+    if (import.meta.env.DEV) {
+      console.log(`[plan-detail] loadPlan#${seq} calling normalizer`)
+    }
+    const t2 = Date.now()
     const result = normalizeTravelPlanRecord(plan.value)
     normalizedPlan.value = result.data
+    if (import.meta.env.DEV) {
+      console.log(`[plan-detail] loadPlan#${seq} normalizer done`, {
+        elapsed: Date.now() - t2,
+        hasData: result.data != null,
+        warningCount: result.warnings.length,
+      })
+    }
 
     // 开发环境输出 warning
     if (import.meta.env.DEV && result.warnings.length > 0) {
@@ -77,10 +131,25 @@ async function loadPlan(): Promise<void> {
       hasFallbackMarkdown.value = true
     }
   } catch (err: unknown) {
+    if (import.meta.env.DEV) {
+      console.error(`[plan-detail] loadPlan#${seq} catch`, {
+        elapsed: Date.now() - t0,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
     loadError.value = classifyPlanLoadError(err)
   } finally {
     isLoading.value = false
     _loading = false
+    if (import.meta.env.DEV) {
+      console.log(`[plan-detail] loadPlan#${seq} finally`, {
+        totalElapsed: Date.now() - t0,
+        isLoading: isLoading.value,
+        hasPlan: plan.value != null,
+        hasNormalized: normalizedPlan.value != null,
+        loadError: loadError.value,
+      })
+    }
   }
 }
 
