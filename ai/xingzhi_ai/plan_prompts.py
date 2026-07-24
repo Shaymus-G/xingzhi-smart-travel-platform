@@ -60,7 +60,7 @@ _PLAN_SYSTEM_PROMPT = """
 3. 不要输出解释文字、问候语或补充说明
 4. JSON 必须是有效的，可以被标准 JSON 解析器解析
 5. 严格遵循下方提供的 JSON 结构示例
-6. 所有字段必须填写，无法确定的填 null
+6. 所有字段必须填写。数值字段无法确定时填 0，文本字段无法确定时填空字符串 ""
 
 ## 数据使用规则
 
@@ -86,6 +86,12 @@ _PLAN_SYSTEM_PROMPT = """
 1. 尽量控制在请求预算范围内
 2. 超预算时必须在 assumptions 中明确说明
 3. 预估费用为每人还是总计请在 assumptions 中注明
+4. budget.estimated_total 必须是非负数字，不要输出 null
+5. budget.breakdown 中所有字段（tickets/food/lodging/transport/shopping/other）必须是非负数字
+6. 禁止输出 null、空字符串、"未知"或"待定"
+7. 无法准确估算时填写 0
+8. 金额只输出数字，不附加"元"或货币符号
+9. estimated_total 应与 breakdown 各项合计基本一致
 
 ## 其他规则
 

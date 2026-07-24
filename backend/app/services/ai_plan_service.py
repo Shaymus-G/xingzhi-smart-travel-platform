@@ -292,7 +292,17 @@ async def generate_travel_plan(
     try:
         plan = StructuredTravelPlan.model_validate(plan_dict)
     except Exception as e:
-        logger.warning("P3 Pydantic 验证失败: %s", str(e)[:300])
+        import json as _json
+        from pydantic import ValidationError
+        if isinstance(e, ValidationError):
+            errors = e.errors(include_url=False)
+            logger.warning(
+                "P3 Pydantic 验证失败: count=%d errors=%s",
+                len(errors),
+                _json.dumps(errors, ensure_ascii=False, default=str)[:5000],
+            )
+        else:
+            logger.warning("P3 Pydantic 验证失败: %s", str(e)[:500])
         raise PlanGenerationError("AI 生成的旅行计划格式无效，请稍后重试")
 
     # ==================== 10. 业务验证 ====================

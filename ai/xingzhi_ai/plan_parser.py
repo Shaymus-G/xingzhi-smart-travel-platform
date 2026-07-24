@@ -117,7 +117,7 @@ def _extract_first_json_object(text: str) -> Optional[str]:
     try:
         obj, end_idx = decoder.raw_decode(text, start_idx)
         if isinstance(obj, dict) and obj:
-            return text[start_idx : start_idx + end_idx]
+            return text[start_idx:end_idx]
     except json.JSONDecodeError:
         pass
 

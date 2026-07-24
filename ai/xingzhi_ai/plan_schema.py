@@ -54,20 +54,42 @@ class PlanDestination(BaseModel):
 
 
 class BudgetBreakdown(BaseModel):
-    """预算明细"""
+    """预算明细 — 所有 None 自动归一化为 0.0"""
     tickets: float = Field(default=0, ge=0, description="门票费用")
     food: float = Field(default=0, ge=0, description="餐饮费用")
     lodging: float = Field(default=0, ge=0, description="住宿费用")
     transport: float = Field(default=0, ge=0, description="交通费用")
+    shopping: float = Field(default=0, ge=0, description="购物费用")
     other: float = Field(default=0, ge=0, description="其他费用")
+
+    @field_validator("tickets", "food", "lodging", "transport", "shopping", "other", mode="before")
+    @classmethod
+    def normalize_nullable_amount(cls, v) -> float:
+        if v is None or v == "":
+            return 0.0
+        return v
 
 
 class PlanBudget(BaseModel):
-    """预算信息（P3 放宽：所有字段可选，防止 DeepSeek 遗漏字段导致全盘失败）"""
+    """预算信息 — None → 0.0 自动归一化"""
     currency: str = Field(default="CNY", max_length=10)
     requested_total: Optional[float] = Field(default=None, ge=0, description="请求预算总额")
     estimated_total: float = Field(default=0, ge=0, description="预估总费用")
     breakdown: BudgetBreakdown = Field(default_factory=BudgetBreakdown)
+
+    @field_validator("estimated_total", mode="before")
+    @classmethod
+    def normalize_nullable_total(cls, v) -> float:
+        if v is None or v == "":
+            return 0.0
+        return v
+
+    @field_validator("breakdown", mode="before")
+    @classmethod
+    def normalize_nullable_breakdown(cls, v):
+        if v is None:
+            return {}
+        return v
 
     @field_validator("estimated_total")
     @classmethod
