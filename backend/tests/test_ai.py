@@ -986,3 +986,111 @@ class TestUnifiedTimeline:
         assert timeline[0]["res_type"] == "restaurant"
         assert timeline[1]["res_type"] == "shopping_mall"
         assert timeline[2]["res_type"] == "entertainment"
+
+
+# ==================== P5: Transit 空值边界测试 ====================
+
+
+class TestSafeScalar:
+    def test_number(self):
+        from app.services.ai_plan_service import _safe_scalar
+        assert _safe_scalar(500) == 500.0
+
+    def test_numeric_string(self):
+        from app.services.ai_plan_service import _safe_scalar
+        assert _safe_scalar("500") == 500.0
+
+    def test_empty_list(self):
+        from app.services.ai_plan_service import _safe_scalar
+        assert _safe_scalar([]) is None
+
+    def test_none(self):
+        from app.services.ai_plan_service import _safe_scalar
+        assert _safe_scalar(None) is None
+
+    def test_empty_string(self):
+        from app.services.ai_plan_service import _safe_scalar
+        assert _safe_scalar("") is None
+
+    def test_empty_dict(self):
+        from app.services.ai_plan_service import _safe_scalar
+        assert _safe_scalar({}) is None
+
+    def test_string_with_unit(self):
+        from app.services.ai_plan_service import _safe_scalar
+        # "12832 米" → not a pure number, return None
+        assert _safe_scalar("12832 米") is None
+
+
+class TestTransitFormatEdgeCases:
+    def test_empty_distance_list(self):
+        from app.services.ai_plan_service import _format_transit_string
+        result = {"method": "transit", "distance": [], "duration": [], "segments": []}
+        s = _format_transit_string(result)
+        assert s is not None
+        assert "暂未获取到" in s
+        assert "[]" not in s
+
+    def test_none_distance_and_duration(self):
+        from app.services.ai_plan_service import _format_transit_string
+        result = {"method": "transit", "distance": None, "duration": None}
+        s = _format_transit_string(result)
+        assert "[]" not in s
+        assert "None" not in s
+
+    def test_empty_string_values(self):
+        from app.services.ai_plan_service import _format_transit_string
+        result = {"method": "transit", "distance": "", "duration": ""}
+        s = _format_transit_string(result)
+        assert "[]" not in s
+        assert "None" not in s
+
+    def test_numeric_values(self):
+        from app.services.ai_plan_service import _format_transit_string
+        result = {"method": "transit", "distance": 5000, "duration": 30, "segments": []}
+        s = _format_transit_string(result)
+        assert "5000" not in s  # 应格式化为 "5.0 公里"
+        assert "公里" in s
+        assert "[]" not in s
+        assert "None" not in s
+
+    def test_cost_empty_list(self):
+        from app.services.ai_plan_service import _format_transit_string
+        result = {"method": "transit", "distance": 3000, "duration": 20, "cost": [], "segments": []}
+        s = _format_transit_string(result)
+        assert "[]" not in s
+
+    def test_driving_empty_values(self):
+        from app.services.ai_plan_service import _format_transit_string
+        result = {"method": "driving", "distance": [], "duration": []}
+        s = _format_transit_string(result)
+        assert s is not None
+        assert "[]" not in s
+
+    def test_walking_empty_values(self):
+        from app.services.ai_plan_service import _format_transit_string
+        result = {"method": "walking", "distance": "", "duration": ""}
+        s = _format_transit_string(result)
+        assert "[]" not in s
+        assert "None" not in s
+
+    def test_bicycling_with_none(self):
+        from app.services.ai_plan_service import _format_transit_string
+        result = {"method": "bicycling", "distance": None, "duration": None}
+        s = _format_transit_string(result)
+        assert "None" not in s
+
+    def test_no_duplicate_unit(self):
+        from app.services.ai_plan_service import _format_transit_string
+        # 数字值不应产生 "米 米" 或 "分钟 分钟"
+        result = {"method": "walking", "distance": 1300, "duration": 18}
+        s = _format_transit_string(result)
+        assert "1300 米" not in s  # 应格式化为 "1.3 公里"
+        assert "公里" in s or "米" in s
+        assert "分钟" in s
+
+    def test_no_coroutine_leak(self):
+        from app.services.ai_plan_service import _format_transit_string
+        result = {"method": "walking", "distance": 500, "duration": 5}
+        s = _format_transit_string(result)
+        assert "coroutine" not in s.lower()

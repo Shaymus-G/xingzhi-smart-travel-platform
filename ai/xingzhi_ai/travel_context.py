@@ -476,8 +476,9 @@ def build_grounding_rules() -> str:
 3. 不得编造平台数据中不存在的评分、价格、开放时间或具体地址。
    数据缺失时如实说明"平台暂无该数据"。
 
-4. 娱乐和购物候选数据仅覆盖部分城市。如果某城市没有娱乐或商场候选，
-   向用户说明平台暂无相关数据，不得编造具体娱乐场所或商场。
+4. 娱乐和购物候选来自高德 POI，category 为粗粒度分类（如"体育休闲服务"）。
+   平台已对候选做语义评分和排序，优先推荐名称匹配用户需求的资源。
+   如果候选中没有语义合适的条目，向用户如实说明，不强行推荐不匹配的资源。
 
 5. 天气数据缺失时，必须向用户明确说明未获取实时天气，
    不得编造天气状况。
@@ -501,3 +502,309 @@ def build_grounding_rules() -> str:
 12. 如果用户没有指定目的地城市，不要注入虚假城市数据。可以询问用户
     想去哪里，或给出通用建议。
 """.strip()
+
+
+# ==================== P5: 语义分类与候选评分 ====================
+
+# 娱乐子类型关键词映射
+_ENT_KEYWORDS: dict[str, list[str]] = {
+    "ktv": ["KTV", "ktv", "纯K", "量贩", "歌城", "歌厅", "唱吧", "音乐会所"],
+    "cinema": ["电影院", "影城", "影院", "IMAX", "电影城"],
+    "bar": ["酒吧", "BAR", "bar", "CLUB", "club", "夜店", "livehouse", "LiveHouse",
+            "清吧", "爵士俱乐部", "鸡尾酒"],
+    "theater": ["剧院", "大剧院", "演艺中心", "剧场", "话剧"],
+    "music_venue": ["音乐厅", "音乐中心", "音乐馆"],
+    "amusement": ["游乐园", "乐园", "游戏厅", "电玩", "密室", "剧本杀", "桌游", "心跳乐园"],
+    "spa": ["温泉", "洗浴", "汤泉", "SPA", "spa"],
+    "outdoor_leisure": ["漂流", "峡谷", "度假村", "滑雪", "露营", "体育公园", "骑马"],
+}
+
+# 商场子类型关键词映射
+_MALL_KEYWORDS: dict[str, list[str]] = {
+    "shopping_center": ["购物中心", "购物广场", "商业广场", "万象城", "来福士", "大悦城",
+                       "吾悦广场", "万达广场", "银泰", "SKP", "环球中心", "宝龙广场",
+                       "招商花园城", "高德置地", "置地广场"],
+    "department_store": ["百货", "新玛特", "王府井", "太平洋百货", "百货大楼"],
+    "commercial_street": ["步行街", "商业街", "街区", "坊", "天地", "河坊街", "湖滨"],
+    "outlet": ["奥特莱斯", "OUTLETS", "outlets", "砂之船", "奥莱"],
+    "specialty_market": ["服装城", "女装大厦", "批发市场", "商品市场", "小商品"],
+}
+
+# category 权重信号
+_ENT_CATEGORY_SIGNAL: dict[str, float] = {
+    "体育休闲服务": 0.3,
+    "风景名胜": -0.3,
+    "购物服务": -0.5,
+    "餐饮服务": -0.5,
+    "科教文化服务": -0.7,
+    "公司企业": -0.9,
+}
+
+_MALL_CATEGORY_SIGNAL: dict[str, float] = {
+    "购物服务": 0.3,
+    "商务住宅": -0.2,
+    "风景名胜": -0.5,
+    "公司企业": -0.9,
+    "体育休闲服务": -0.5,
+}
+
+
+def classify_entertainment_subtype(name: str, category: str) -> str:
+    """根据名称和 category 推断娱乐业务子类型。
+
+    Returns:
+        "ktv" | "cinema" | "bar" | "theater" | "music_venue" |
+        "amusement" | "spa" | "outdoor_leisure" |
+        "generic_entertainment" | "mismatch"
+    """
+    # 先按 category 判断 mismatch（关键词可能误导分类）
+    if category in ("购物服务", "餐饮服务", "科教文化服务", "公司企业"):
+        return "mismatch"
+
+    # 关键词匹配
+    for subtype, keywords in _ENT_KEYWORDS.items():
+        for kw in keywords:
+            if kw.lower() in name.lower():
+                # 风景名胜 + outdoor_leisure 关键词（峡谷/漂流/度假村等）仍视为 mismatch
+                if category == "风景名胜" and subtype not in ("spa", "amusement"):
+                    return "mismatch"
+                return subtype
+
+    if category == "风景名胜":
+        return "mismatch"
+    if category == "体育休闲服务":
+        return "generic_entertainment"
+    return "generic_entertainment"
+
+
+def classify_mall_subtype(name: str, category: str) -> str:
+    """根据名称和 category 推断商场业务子类型。
+
+    Returns:
+        "shopping_center" | "department_store" | "commercial_street" |
+        "outlet" | "specialty_market" |
+        "generic_shopping" | "mismatch"
+    """
+    for subtype, keywords in _MALL_KEYWORDS.items():
+        for kw in keywords:
+            if kw.lower() in name.lower():
+                return subtype
+    if category == "购物服务":
+        return "generic_shopping"
+    if category in ("商务住宅", "公司企业", "风景名胜"):
+        return "mismatch"
+    return "generic_shopping"
+
+
+# 用户意图关键词
+_INTENT_KEYWORDS: dict[str, list[str]] = {
+    "ktv": ["KTV", "ktv", "唱歌", "歌厅", "练歌"],
+    "cinema": ["电影", "影院", "IMAX", "看电影"],
+    "nightlife": ["夜生活", "夜店", "酒吧", "晚上玩", "夜间", "宵夜", "蹦迪"],
+    "theater": ["话剧", "演出", "剧院", "剧场", "演艺", "看剧", "相声"],
+    "music": ["音乐", "乐队", "live", "LiveHouse", "演唱会", "爵士"],
+    "amusement": ["游乐园", "乐园", "游乐场", "电玩", "密室", "剧本杀", "桌游",
+                  "带孩子", "亲子", "小孩", "儿童"],
+    "spa": ["温泉", "泡汤", "洗浴", "SPA", "按摩"],
+    "outdoor_leisure": ["漂流", "滑雪", "露营", "户外", "骑马", "度假村"],
+    "shopping_center": ["购物中心", "商场", "购物广场", "逛街", "逛商场"],
+    "department_store": ["百货", "百货商店", "百货大楼"],
+    "commercial_street": ["步行街", "商业街", "逛街", "夜市"],
+    "outlet": ["奥特莱斯", "奥莱", "折扣"],
+}
+
+
+def detect_user_intents(
+    user_message: str = "",
+    preferences: list[str] | None = None,
+    notes: str = "",
+) -> frozenset[str]:
+    """从用户消息、偏好和备注中识别意图。
+
+    Args:
+        user_message: 当前用户消息（普通聊天）或空字符串（计划模式）。
+        preferences: 用户偏好列表。
+        notes: 用户备注。
+
+    Returns:
+        意图集合，如 frozenset({"ktv", "nightlife"})。空集合表示无明确意图。
+    """
+    intents: set[str] = set()
+    text = f"{user_message} {' '.join(preferences or [])} {notes}".lower()
+
+    for intent, keywords in _INTENT_KEYWORDS.items():
+        for kw in keywords:
+            if kw.lower() in text:
+                intents.add(intent)
+                break
+
+    # 没有明确意图时，根据通用词判断
+    if not intents:
+        if any(w in text for w in ("娱乐", "夜生活", "玩")):
+            intents.add("general_entertainment")
+        if any(w in text for w in ("购物", "逛街", "商场", "逛")):
+            intents.add("general_shopping")
+        if "吃住行娱游购" in text or "六方面" in text:
+            intents.add("general_entertainment")
+            intents.add("general_shopping")
+
+    return frozenset(intents)
+
+
+def _category_signal(category: str, signal_map: dict[str, float]) -> float:
+    """获取 category 信号值，未知 category 返回 0"""
+    return signal_map.get(category, 0.0)
+
+
+def score_entertainment_candidate(
+    name: str,
+    category: str,
+    original_score: float | None,
+    intents: frozenset[str],
+) -> tuple[float, str]:
+    """对娱乐候选评分。
+
+    Returns:
+        (total_score, subtype): 分数越高越相关；还会返回推断的子类型。
+    """
+    subtype = classify_entertainment_subtype(name, category)
+    base = float(original_score or 0)
+
+    # category 信号
+    cat_sig = _category_signal(category, _ENT_CATEGORY_SIGNAL)
+
+    # mismatch 强扣分
+    if subtype == "mismatch":
+        return (base - 10.0 + cat_sig, subtype)
+
+    # 意图匹配加分
+    intent_bonus = 0.0
+
+    # 直接子类型匹配
+    if subtype in intents:
+        intent_bonus += 3.0
+    elif any(i in intents for i in ("nightlife",) if subtype in ("bar", "music_venue")):
+        intent_bonus += 2.5
+    elif any(i in intents for i in ("theater", "music") if subtype in ("theater", "music_venue")):
+        intent_bonus += 2.5
+    elif any(i in intents for i in ("amusement",) if subtype == "amusement"):
+        intent_bonus += 3.0
+    elif any(i in intents for i in ("spa",) if subtype == "spa"):
+        intent_bonus += 3.0
+    elif any(i in intents for i in ("outdoor_leisure",) if subtype == "outdoor_leisure"):
+        intent_bonus += 3.0
+
+    # 通用娱乐意图
+    if "general_entertainment" in intents and subtype != "mismatch":
+        if intent_bonus == 0:
+            intent_bonus += 0.5
+
+    # 无明确意图时，给 mismatch 降权但不排除
+    if not intents and subtype == "mismatch":
+        intent_bonus -= 5.0
+
+    return (base + cat_sig + intent_bonus, subtype)
+
+
+def score_mall_candidate(
+    name: str,
+    category: str,
+    original_score: float | None,
+    intents: frozenset[str],
+) -> tuple[float, str]:
+    """对商场候选评分。"""
+    subtype = classify_mall_subtype(name, category)
+    base = float(original_score or 0)
+    cat_sig = _category_signal(category, _MALL_CATEGORY_SIGNAL)
+
+    if subtype == "mismatch":
+        return (base - 10.0 + cat_sig, subtype)
+
+    intent_bonus = 0.0
+    if subtype in intents:
+        intent_bonus += 3.0
+
+    # 商务住宅但有明确商场名称（来福士/万象城等）不扣分
+    if subtype != "mismatch" and category == "商务住宅":
+        intent_bonus -= 1.0  # 轻微降权
+
+    if "general_shopping" in intents and subtype != "mismatch":
+        if intent_bonus == 0:
+            intent_bonus += 0.5
+
+    if not intents and subtype == "mismatch":
+        intent_bonus -= 5.0
+
+    return (base + cat_sig + intent_bonus, subtype)
+
+
+def filter_and_rank_entertainments(
+    entertainments: list[dict],
+    user_message: str = "",
+    preferences: list[str] | None = None,
+    notes: str = "",
+    max_count: int = 5,
+) -> list[dict]:
+    """对娱乐候选评分并排序，返回 top-N。
+
+    先扩大查询（调用方负责传入更多候选），在此过滤重排。
+    无明确意图时不强制过滤，仅降权 mismatch。
+    """
+    intents = detect_user_intents(user_message, preferences, notes)
+
+    scored = []
+    for e in entertainments:
+        score, subtype = score_entertainment_candidate(
+            e.get("name", ""),
+            e.get("category", "") or "",
+            e.get("score"),
+            intents,
+        )
+        scored.append((score, subtype, e))
+
+    # 按分数降序，id 保证确定性
+    scored.sort(key=lambda x: (-x[0], x[2].get("id", 0)))
+
+    # 强过滤：mismatch 且分数 < -5（明确不可用）
+    result = []
+    for score, subtype, ent in scored:
+        if subtype == "mismatch" and score < -5.0 and intents:
+            continue  # 有明确意图时排除强 mismatch
+        result.append(ent)
+        if len(result) >= max_count:
+            break
+
+    return result
+
+
+def filter_and_rank_malls(
+    malls: list[dict],
+    user_message: str = "",
+    preferences: list[str] | None = None,
+    notes: str = "",
+    max_count: int = 5,
+) -> list[dict]:
+    """对商场候选评分并排序，返回 top-N。"""
+    intents = detect_user_intents(user_message, preferences, notes)
+
+    scored = []
+    for m in malls:
+        score, subtype = score_mall_candidate(
+            m.get("name", ""),
+            m.get("category", "") or "",
+            m.get("score"),
+            intents,
+        )
+        scored.append((score, subtype, m))
+
+    scored.sort(key=lambda x: (-x[0], x[2].get("id", 0)))
+
+    result = []
+    for score, subtype, mall in scored:
+        if subtype == "mismatch" and score < -5.0 and intents:
+            continue
+        result.append(mall)
+        if len(result) >= max_count:
+            break
+
+    return result

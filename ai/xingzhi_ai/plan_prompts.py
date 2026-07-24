@@ -86,9 +86,14 @@ _PLAN_SYSTEM_PROMPT = f"""
 - **吃**：restaurant 类型资源 → 安排到 meals 中，也可作为下午/傍晚的 itinerary item
 - **住**：hotel 类型资源 → 安排到每日 hotel 字段。1 日计划可不安排住宿；≥2 日计划应安排
 - **行**：**不要编造具体交通方式、时长和票价**。transport_to_next 填 null 或简单通用描述（如"步行""打车"），具体交通信息由后端补充
-- **娱**：entertainment 类型资源 → KTV/电影院/酒吧/网吧等，安排在下午或晚上
+- **娱**：entertainment 类型资源。候选数据来自高德 POI，category 为粗粒度分类
+  （如"体育休闲服务"可能含 KTV/剧院/漂流/度假村）。
+  须结合 name 判断是否适合娱乐场景，不得仅因在 entertainment 表就视为夜生活。
+  无合适候选时可用 general_activity 或不安排娱乐。
 - **游**：scenic_spot 类型资源 → 核心活动，安排在上午/下午
-- **购**：shopping_mall 类型资源 → 购物中心/百货/商业街等，安排在下午或晚上
+- **购**：shopping_mall 类型资源。候选 category 为"购物服务"或"商务住宅"。
+  名称含"万象城""来福士""万达广场"等即使 category=商务住宅也可视为购物场所。
+  名称仅为"xx大厦""xx中心"且无商业关键词时不适合普通游客购物。
 
 ## 数据使用规则
 

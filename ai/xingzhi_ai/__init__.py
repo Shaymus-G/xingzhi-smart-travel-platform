@@ -47,6 +47,13 @@ from xingzhi_ai.travel_context import (
     WeatherInfo,
     TravelContext,
     build_travel_context_block,
+    classify_entertainment_subtype,
+    classify_mall_subtype,
+    detect_user_intents,
+    score_entertainment_candidate,
+    score_mall_candidate,
+    filter_and_rank_entertainments,
+    filter_and_rank_malls,
 )
 
 # P3: 旅行计划生成
@@ -89,6 +96,13 @@ __all__ = [
     "WeatherInfo",
     "TravelContext",
     "build_travel_context_block",
+    "classify_entertainment_subtype",
+    "classify_mall_subtype",
+    "detect_user_intents",
+    "score_entertainment_candidate",
+    "score_mall_candidate",
+    "filter_and_rank_entertainments",
+    "filter_and_rank_malls",
     # P3: Plan Generation
     "StructuredTravelPlan",
     "extract_and_parse_json",

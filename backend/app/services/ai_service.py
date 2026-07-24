@@ -34,6 +34,8 @@ from xingzhi_ai.travel_context import (
     WeatherInfo,
     TravelContext,
     build_travel_context_block,
+    filter_and_rank_entertainments,
+    filter_and_rank_malls,
 )
 from xingzhi_ai.exceptions import (
     AIServiceError,
@@ -55,6 +57,9 @@ DEFAULT_TOP_RESTAURANTS = 5
 DEFAULT_TOP_ENTERTAINMENTS = 5
 DEFAULT_TOP_MALLS = 5
 DEFAULT_TOP_PREFERENCES = 10
+
+# 语义评分前查询扩大的倍数（先拉更多候选，再评分过滤到 DEFAULT_TOP_*）
+_SCORING_FETCH_MULTIPLIER = 2
 
 
 # ==================== 现有 CRUD（保留） ====================
@@ -387,23 +392,33 @@ async def generate_ai_reply(
         except Exception:
             logger.warning("餐厅查询失败: city_id=%d", city_id, exc_info=True)
 
-        # 4b. 娱乐（P4 新增）
+        # 4b. 娱乐（P4 新增 + P5 语义评分）
         entertainments_data: list[dict] = []
         try:
             ent_orms = travel_service.get_top_entertainments_by_city(
-                db, city_id, limit=DEFAULT_TOP_ENTERTAINMENTS
+                db, city_id, limit=DEFAULT_TOP_ENTERTAINMENTS * _SCORING_FETCH_MULTIPLIER
             )
-            entertainments_data = [_orm_entertainment_to_dict(e) for e in ent_orms]
+            raw_ents = [_orm_entertainment_to_dict(e) for e in ent_orms]
+            entertainments_data = filter_and_rank_entertainments(
+                raw_ents,
+                user_message=current_message_content,
+                max_count=DEFAULT_TOP_ENTERTAINMENTS,
+            )
         except Exception:
             logger.warning("娱乐查询失败: city_id=%d", city_id, exc_info=True)
 
-        # 4c. 商场（P4 新增）
+        # 4c. 商场（P4 新增 + P5 语义评分）
         malls_data: list[dict] = []
         try:
             mall_orms = travel_service.get_top_malls_by_city(
-                db, city_id, limit=DEFAULT_TOP_MALLS
+                db, city_id, limit=DEFAULT_TOP_MALLS * _SCORING_FETCH_MULTIPLIER
             )
-            malls_data = [_orm_mall_to_dict(m) for m in mall_orms]
+            raw_malls = [_orm_mall_to_dict(m) for m in mall_orms]
+            malls_data = filter_and_rank_malls(
+                raw_malls,
+                user_message=current_message_content,
+                max_count=DEFAULT_TOP_MALLS,
+            )
         except Exception:
             logger.warning("商场查询失败: city_id=%d", city_id, exc_info=True)
 

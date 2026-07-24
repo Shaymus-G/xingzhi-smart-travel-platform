@@ -45,6 +45,8 @@ from xingzhi_ai.travel_context import (
     RestaurantInfo,
     PreferenceInfo,
     WeatherInfo,
+    filter_and_rank_entertainments,
+    filter_and_rank_malls,
 )
 from xingzhi_ai.exceptions import (
     AIServiceError,
@@ -177,7 +179,7 @@ async def generate_travel_plan(
     except Exception:
         logger.warning("P3 餐厅查询失败: city_id=%d", city_id, exc_info=True)
 
-    # Entertainment & ShoppingMall (P4)
+    # Entertainment & ShoppingMall (P4 + P5 语义评分)
     entertainment_limit = min(max(days, _MIN_ENTERTAINMENTS), _MAX_ENTERTAINMENTS)
     mall_limit = min(max(days, _MIN_MALLS), _MAX_MALLS)
 
@@ -186,15 +188,31 @@ async def generate_travel_plan(
 
     try:
         from app.services.ai_service import _orm_entertainment_to_dict
-        ent_orms = travel_service.get_top_entertainments_by_city(db, city_id, limit=entertainment_limit)
-        entertainments = [_orm_entertainment_to_dict(e) for e in ent_orms]
+        ent_orms = travel_service.get_top_entertainments_by_city(
+            db, city_id, limit=entertainment_limit * 2
+        )
+        raw_ents = [_orm_entertainment_to_dict(e) for e in ent_orms]
+        entertainments = filter_and_rank_entertainments(
+            raw_ents,
+            preferences=preferences,
+            notes=notes or "",
+            max_count=entertainment_limit,
+        )
     except Exception:
         logger.warning("P3 娱乐查询失败: city_id=%d", city_id, exc_info=True)
 
     try:
         from app.services.ai_service import _orm_mall_to_dict
-        mall_orms = travel_service.get_top_malls_by_city(db, city_id, limit=mall_limit)
-        malls = [_orm_mall_to_dict(m) for m in mall_orms]
+        mall_orms = travel_service.get_top_malls_by_city(
+            db, city_id, limit=mall_limit * 2
+        )
+        raw_malls = [_orm_mall_to_dict(m) for m in mall_orms]
+        malls = filter_and_rank_malls(
+            raw_malls,
+            preferences=preferences,
+            notes=notes or "",
+            max_count=mall_limit,
+        )
     except Exception:
         logger.warning("P3 商场查询失败: city_id=%d", city_id, exc_info=True)
 
@@ -660,10 +678,75 @@ def _choose_transit_method(
         return "transit"
 
 
+def _safe_scalar(value) -> float | None:
+    """安全提取数值标量。
+
+    处理：数字、合法数字字符串、空列表、None、空字符串。
+    返回 None 表示无法提取。
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return float(stripped)
+        except ValueError:
+            return None
+    if isinstance(value, (list, dict)):
+        return None
+    return None
+
+
+def _format_distance(distance_value) -> str | None:
+    """安全格式化距离。
+
+    兼容：纯数字（米）、纯数字字符串、已含单位的字符串（如 "12832 米"）。
+    """
+    # 已是带单位的字符串 → 直接返回
+    if isinstance(distance_value, str) and distance_value.strip():
+        s = distance_value.strip()
+        if any(u in s for u in ("米", "公里", "千米", "km", "KM")):
+            return s
+    # 纯数字
+    s = _safe_scalar(distance_value)
+    if s is None:
+        return None
+    if s >= 1000:
+        return f"{s/1000:.1f} 公里"
+    return f"{int(s)} 米"
+
+
+def _format_duration(duration_value) -> str | None:
+    """安全格式化时长。
+
+    兼容：纯数字（分钟）、纯数字字符串、已含单位的字符串（如 "45 分钟"）。
+    """
+    # 已是带单位的字符串 → 直接返回
+    if isinstance(duration_value, str) and duration_value.strip():
+        s = duration_value.strip()
+        if any(u in s for u in ("分钟", "小时", "min", "Min")):
+            return s
+    # 纯数字
+    s = _safe_scalar(duration_value)
+    if s is None:
+        return None
+    minutes = int(s)
+    if minutes >= 60:
+        h = minutes // 60
+        m = minutes % 60
+        return f"{h} 小时{m} 分钟" if m else f"{h} 小时"
+    return f"{minutes} 分钟"
+
+
 def _format_transit_string(result: dict) -> str | None:
     """将 transit_service 返回的结果格式化为稳定的字符串。
 
     不输出 Python repr、完整原始 JSON、None、coroutine。
+    安全处理空数组、None、空字符串、缺失字段。
 
     Returns:
         格式化的交通描述字符串，或 None（无法格式化时）。
@@ -672,56 +755,79 @@ def _format_transit_string(result: dict) -> str | None:
         return None
 
     method = result.get("method", "")
-    distance = str(result.get("distance", ""))
-    duration = str(result.get("duration", ""))
+    dist_str = _format_distance(result.get("distance"))
+    dur_str = _format_duration(result.get("duration"))
 
     if method == "transit":
-        parts = [f"公交/地铁约 {duration}，约 {distance}"]
-        cost = result.get("cost")
-        # 兼容 cost 为数字、字符串或列表
-        if isinstance(cost, (int, float)) and cost > 0:
-            parts.append(f"，票价约 {cost} 元")
-        elif isinstance(cost, str) and cost.strip():
-            parts.append(f"，票价约 {cost}")
-        walking_dist = result.get("walking_distance")
-        if walking_dist:
-            parts.append(f"含步行约 {walking_dist}")
+        # 无公交方案：distance/duration 为空 → 返回降级文本
+        if dist_str is None and dur_str is None:
+            return "暂未获取到可用的公共交通路线，请以地图实时查询结果为准"
 
-        # 提取关键换乘（最多 3 段）
+        parts: list[str] = []
+        if dur_str and dist_str:
+            parts.append(f"公交/地铁约 {dur_str}，约 {dist_str}")
+        elif dur_str:
+            parts.append(f"公交/地铁约 {dur_str}")
+        elif dist_str:
+            parts.append(f"公交/地铁约 {dist_str}")
+
+        cost = result.get("cost")
+        cost_scalar = _safe_scalar(cost)
+        if cost_scalar is not None and cost_scalar > 0:
+            parts.append(f"，票价约 {cost_scalar:.0f} 元")
+        elif isinstance(cost, str) and cost.strip():
+            # 已含单位的字符串（如 "4.0 元"）
+            parts.append(f"，票价约 {cost.strip()}")
+
+        walking = _safe_scalar(result.get("walking_distance"))
+        if walking is not None and walking > 0:
+            parts.append(f"，含步行约 {int(walking)} 米")
+
+        # 提取关键换乘
         segments = result.get("segments", [])
-        key_steps: list[str] = []
-        for seg in segments[:6]:
-            seg_type = seg.get("type", "")
-            if seg_type == "subway" or seg_type == "bus":
-                name = seg.get("name", "")
-                departure = seg.get("departure", "")
-                arrival = seg.get("arrival", "")
-                if name and departure and arrival:
-                    key_steps.append(f"{departure}乘{name}至{arrival}")
-                elif name:
-                    key_steps.append(name)
-        if key_steps:
-            parts.append("；" + "，".join(key_steps[:3]))
+        if isinstance(segments, list):
+            key_steps: list[str] = []
+            for seg in segments[:6]:
+                if not isinstance(seg, dict):
+                    continue
+                seg_type = seg.get("type", "")
+                if seg_type in ("subway", "bus"):
+                    name = seg.get("name", "")
+                    departure = seg.get("departure", "")
+                    arrival = seg.get("arrival", "")
+                    if name and departure and arrival:
+                        key_steps.append(f"{departure}乘{name}至{arrival}")
+                    elif name:
+                        key_steps.append(str(name))
+            if key_steps:
+                parts.append("；" + "，".join(key_steps[:3]))
+
         parts.append("；请以出行时地图实时结果为准")
         return "".join(parts)
 
     elif method == "driving":
-        parts = [f"驾车约 {duration}，约 {distance}"]
+        if dist_str is None and dur_str is None:
+            return "驾车路线暂未获取到，请以地图实时查询结果为准"
+        parts = [f"驾车约 {dur_str or '未知'}，约 {dist_str or '未知'}"]
         toll = result.get("toll")
-        traffic_lights = result.get("traffic_lights")
-        if traffic_lights:
-            parts.append(f"约 {traffic_lights} 个红绿灯")
-        if toll:
-            parts.append(f"预计过路费 {toll}")
+        if toll and not isinstance(toll, (list, dict)):
+            toll_str = str(toll).strip()
+            if toll_str:
+                parts.append(f"，预计过路费 {toll_str}")
+        lights = _safe_scalar(result.get("traffic_lights"))
+        if lights is not None and lights > 0:
+            parts.append(f"，约 {int(lights)} 个红绿灯")
         return "".join(parts)
 
     elif method == "walking":
-        return f"步行约 {duration}，约 {distance}"
+        if dist_str and dur_str:
+            return f"步行约 {dur_str}，约 {dist_str}"
+        return "步行路线暂未获取到"
 
     elif method == "bicycling":
-        return f"骑行约 {duration}，约 {distance}"
-
-    return None
+        if dist_str and dur_str:
+            return f"骑行约 {dur_str}，约 {dist_str}"
+        return "骑行路线暂未获取到"
 
 
 async def _fill_real_transport(
