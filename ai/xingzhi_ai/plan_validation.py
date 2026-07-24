@@ -132,6 +132,20 @@ def validate_plan_resources(
                 else:
                     _normalize_item(item, hotel_candidates[rid])
 
+            elif rt == "entertainment":
+                ent_candidates = entertainment_candidates or {}
+                if rid not in ent_candidates:
+                    errors.append(f"Day {day_num}: 娱乐场所 ID {rid} ('{item.name}') 不在候选列表中")
+                else:
+                    _normalize_item(item, ent_candidates[rid])
+
+            elif rt == "shopping_mall":
+                mall_cands = mall_candidates or {}
+                if rid not in mall_cands:
+                    errors.append(f"Day {day_num}: 商场 ID {rid} ('{item.name}') 不在候选列表中")
+                else:
+                    _normalize_item(item, mall_cands[rid])
+
             # 验证 resource_id 与 name 匹配
             if rid and not errors:
                 candidate = _get_candidate(rt, rid, scenic_candidates, hotel_candidates, restaurant_candidates, entertainment_candidates, mall_candidates)

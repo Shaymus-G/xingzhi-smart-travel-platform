@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime
 from typing import Optional
 
@@ -270,10 +271,21 @@ async def generate_travel_plan(
         {"role": "user", "content": user_message},
     ]
 
-    logger.info("P3 调用 DeepSeek: user_id=%d days=%d budget=%s", user_id, days, budget)
+    # 动态 max_tokens：每天约 2000 tokens，底线 4000，上限 16000
+    plan_max_tokens = min(max(days * 2000, 4000), 16000)
+
+    logger.info(
+        "P3 调用 DeepSeek: user_id=%d days=%d budget=%s max_tokens=%d",
+        user_id, days, budget, plan_max_tokens,
+    )
 
     try:
-        raw_response = await client.chat(messages, temperature=0.7)
+        raw_response = await client.chat(
+            messages,
+            temperature=0.2,
+            max_tokens=plan_max_tokens,
+            response_format={"type": "json_object"},
+        )
     except (AIUpstreamError, AIEmptyResponseError):
         raise
     except AIServiceError as e:
@@ -333,10 +345,19 @@ async def generate_travel_plan(
     # 使用标准化后的计划
     final_plan = validation.normalized_plan or plan
 
-    # ==================== 11. 渲染 Markdown ====================
+    # ==================== 11. 补全真实交通（P5 新增） ====================
+    await _fill_real_transport(
+        final_plan,
+        db=db,
+        city_id=city_id,
+        city_name=display_name,
+        user_preferences=preferences,
+    )
+
+    # ==================== 12. 渲染 Markdown ====================
     markdown = render_travel_plan_markdown(final_plan)
 
-    # ==================== 12. 写入数据库 ====================
+    # ==================== 13. 写入数据库 ====================
     try:
         travel_plan = travel_service.create_plan(
             db,
@@ -574,3 +595,335 @@ def _format_mall_line(index: int, m: dict) -> str:
     if open_time:
         lines.append(f"   Hours: {open_time}")
     return "\n".join(lines)
+
+
+# ==================== 真实交通补全（P5 新增） ====================
+
+# Haversine 距离阈值（米）
+_WALK_DISTANCE_M = 1500       # ≤1500m → 步行
+_BIKE_MAX_DISTANCE_M = 5000   # 1500-5000m → 骑行或公交
+# >5000m → 公交
+
+# 调用上限
+_MAX_TRANSIT_PER_DAY = 3
+_MAX_TRANSIT_TOTAL = 8
+
+# 可导航资源类型
+_NAVIGABLE_TYPES = frozenset({"scenic_spot", "restaurant", "hotel", "entertainment", "shopping_mall"})
+
+
+def _haversine_distance_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """计算两点间的 Haversine 直线距离（米）。
+
+    纯函数，可独立测试。
+    """
+    R = 6371000  # 地球半径（米）
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lng2 - lng1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def _choose_transit_method(
+    distance_m: float,
+    user_preferences: list[str] | None,
+) -> str:
+    """根据距离和用户偏好选择出行方式。
+
+    优先级：
+    1. 用户 notes/preferences 中明确要求 → 优先采用
+    2. ≤1500m → walking
+    3. 1500-5000m → bicycling（降级为 transit）
+    4. >5000m → transit
+
+    Returns:
+        "walking" | "bicycling" | "transit" | "driving"
+    """
+    pref_text = " ".join(p.lower() for p in (user_preferences or []))
+
+    # 从 preferences 中检测出行方式偏好
+    if any(kw in pref_text for kw in ("自驾", "开车", "驾车", "自己开车")):
+        return "driving"
+    if any(kw in pref_text for kw in ("骑行", "单车", "自行车", "骑车")):
+        return "bicycling"
+    if any(kw in pref_text for kw in ("步行", "走路", "徒步")):
+        return "walking"
+
+    # 默认根据距离选择
+    if distance_m <= _WALK_DISTANCE_M:
+        return "walking"
+    elif distance_m <= _BIKE_MAX_DISTANCE_M:
+        return "bicycling"
+    else:
+        return "transit"
+
+
+def _format_transit_string(result: dict) -> str | None:
+    """将 transit_service 返回的结果格式化为稳定的字符串。
+
+    不输出 Python repr、完整原始 JSON、None、coroutine。
+
+    Returns:
+        格式化的交通描述字符串，或 None（无法格式化时）。
+    """
+    if not result or "error" in result:
+        return None
+
+    method = result.get("method", "")
+    distance = str(result.get("distance", ""))
+    duration = str(result.get("duration", ""))
+
+    if method == "transit":
+        parts = [f"公交/地铁约 {duration}，约 {distance}"]
+        cost = result.get("cost")
+        # 兼容 cost 为数字、字符串或列表
+        if isinstance(cost, (int, float)) and cost > 0:
+            parts.append(f"，票价约 {cost} 元")
+        elif isinstance(cost, str) and cost.strip():
+            parts.append(f"，票价约 {cost}")
+        walking_dist = result.get("walking_distance")
+        if walking_dist:
+            parts.append(f"含步行约 {walking_dist}")
+
+        # 提取关键换乘（最多 3 段）
+        segments = result.get("segments", [])
+        key_steps: list[str] = []
+        for seg in segments[:6]:
+            seg_type = seg.get("type", "")
+            if seg_type == "subway" or seg_type == "bus":
+                name = seg.get("name", "")
+                departure = seg.get("departure", "")
+                arrival = seg.get("arrival", "")
+                if name and departure and arrival:
+                    key_steps.append(f"{departure}乘{name}至{arrival}")
+                elif name:
+                    key_steps.append(name)
+        if key_steps:
+            parts.append("；" + "，".join(key_steps[:3]))
+        parts.append("；请以出行时地图实时结果为准")
+        return "".join(parts)
+
+    elif method == "driving":
+        parts = [f"驾车约 {duration}，约 {distance}"]
+        toll = result.get("toll")
+        traffic_lights = result.get("traffic_lights")
+        if traffic_lights:
+            parts.append(f"约 {traffic_lights} 个红绿灯")
+        if toll:
+            parts.append(f"预计过路费 {toll}")
+        return "".join(parts)
+
+    elif method == "walking":
+        return f"步行约 {duration}，约 {distance}"
+
+    elif method == "bicycling":
+        return f"骑行约 {duration}，约 {distance}"
+
+    return None
+
+
+async def _fill_real_transport(
+    plan,
+    *,
+    db,
+    city_id: int,
+    city_name: str,
+    user_preferences: list[str] | None,
+) -> None:
+    """为验证后的计划补全真实交通信息。
+
+    构建统一时间线（items + meals + hotel），按 period 排序后
+    对相邻可导航资源调用 transit_service 获取真实路线，
+    将结果写入 ItineraryItem.transport_to_next（原地修改 plan）。
+
+    限制：
+    - 每天最多 3 段
+    - 全计划最多 8 段
+    - general_activity / resource_id=None → 跳过
+    - 相同 from/to/method → 局部缓存
+    - 只有 ItineraryItem 可写入 transport_to_next
+    - 任何失败 → 保留模型已有描述或填入通用降级文本
+
+    Args:
+        plan: 已验证的 StructuredTravelPlan（会被原地修改）。
+        db: 数据库会话。
+        city_id: 城市 ID。
+        city_name: 城市名（公交模式需要）。
+        user_preferences: 用户偏好列表。
+    """
+    from app.services import transit_service, travel_service
+
+    try:
+        from app.core.config import settings as app_settings
+        if not app_settings.AMAP_KEY:
+            logger.info("P3 交通: AMAP_KEY 未配置，跳过 Transit 补全")
+            return
+    except Exception:
+        logger.info("P3 交通: 无法读取 AMAP_KEY，跳过 Transit 补全")
+        return
+
+    # 时段排序权重（morning < noon < afternoon < evening < night）
+    _PERIOD_ORDER = {"morning": 0, "noon": 1, "afternoon": 2, "evening": 3, "night": 4}
+
+    # resource_id → (lat, lng) 的坐标缓存
+    coord_cache: dict[tuple[str, int], tuple[float, float] | None] = {}
+    # (from_type, from_id, to_type, to_id, method) → formatted_string 的结果缓存
+    result_cache: dict[tuple, str | None] = {}
+
+    total_filled = 0
+
+    def _get_coords(res_type: str, res_id: int) -> tuple[float, float] | None:
+        """获取资源经纬度（带缓存）"""
+        key = (res_type, res_id)
+        if key in coord_cache:
+            return coord_cache[key]
+
+        try:
+            if res_type == "scenic_spot":
+                r = travel_service.get_scenic_by_id(db, res_id)
+            elif res_type == "hotel":
+                r = travel_service.get_hotel_by_id(db, res_id)
+            elif res_type == "restaurant":
+                r = travel_service.get_restaurant_by_id(db, res_id)
+            elif res_type == "entertainment":
+                r = travel_service.get_entertainment_by_id(db, res_id)
+            elif res_type == "shopping_mall":
+                r = travel_service.get_mall_by_id(db, res_id)
+            else:
+                coord_cache[key] = None
+                return None
+
+            if r and r.latitude and r.longitude:
+                result = (float(r.latitude), float(r.longitude))
+            else:
+                result = None
+        except Exception:
+            result = None
+
+        coord_cache[key] = result
+        return result
+
+    for day_plan in plan.itinerary:
+        if total_filled >= _MAX_TRANSIT_TOTAL:
+            break
+
+        day_filled = 0
+
+        # ========== 构建统一时间线 ==========
+        # 每个节点: (period_order, resource_type, resource_id, source_object, kind)
+        # kind ∈ {"item", "meal", "hotel"}
+        # 只有 kind="item" 的节点可写入 transport_to_next
+        timeline: list[dict] = []
+
+        for item in day_plan.items:
+            order = _PERIOD_ORDER.get(item.period, 2)
+            timeline.append({
+                "order": order,
+                "res_type": item.resource_type,
+                "res_id": item.resource_id,
+                "source": item,
+                "kind": "item",
+            })
+
+        for meal in day_plan.meals:
+            order = _PERIOD_ORDER.get(meal.period, 1)
+            timeline.append({
+                "order": order,
+                "res_type": meal.resource_type or "restaurant",
+                "res_id": meal.resource_id,
+                "source": meal,
+                "kind": "meal",
+            })
+
+        if day_plan.hotel and day_plan.hotel.resource_id:
+            timeline.append({
+                "order": 5,  # hotel 总是在最后
+                "res_type": "hotel",
+                "res_id": day_plan.hotel.resource_id,
+                "source": day_plan.hotel,
+                "kind": "hotel",
+            })
+
+        # 按 period 排序
+        timeline.sort(key=lambda n: n["order"])
+
+        # ========== 为相邻节点补全交通 ==========
+        for i in range(len(timeline) - 1):
+            if total_filled >= _MAX_TRANSIT_TOTAL or day_filled >= _MAX_TRANSIT_PER_DAY:
+                break
+
+            from_node = timeline[i]
+            to_node = timeline[i + 1]
+
+            # 只有 ItineraryItem 有 transport_to_next 字段
+            if from_node["kind"] != "item":
+                continue
+
+            from_type = from_node["res_type"]
+            from_id = from_node["res_id"]
+            to_type = to_node["res_type"]
+            to_id = to_node["res_id"]
+
+            # 跳过不可导航资源
+            if not from_id or from_type not in _NAVIGABLE_TYPES:
+                continue
+            if not to_id or to_type not in _NAVIGABLE_TYPES:
+                continue
+
+            # 同一资源跳过
+            if (from_type, from_id) == (to_type, to_id):
+                continue
+
+            # 获取坐标
+            from_coords = _get_coords(from_type, from_id)
+            to_coords = _get_coords(to_type, to_id)
+
+            if not from_coords or not to_coords:
+                continue
+
+            # Haversine 距离 → 选择方式
+            dist_m = _haversine_distance_m(
+                from_coords[0], from_coords[1],
+                to_coords[0], to_coords[1],
+            )
+            method = _choose_transit_method(dist_m, user_preferences)
+
+            # 查缓存
+            cache_key = (from_type, from_id, to_type, to_id, method)
+            if cache_key in result_cache:
+                transport_str = result_cache[cache_key]
+            else:
+                try:
+                    transit_result = await transit_service.get_route(
+                        db, from_type, from_id, to_type, to_id, method, city_name,
+                    )
+                    transport_str = _format_transit_string(transit_result)
+                except Exception:
+                    logger.warning(
+                        "P3 Transit 调用失败: from=(%s,%d) to=(%s,%d) method=%s",
+                        from_type, from_id, to_type, to_id, method,
+                        exc_info=True,
+                    )
+                    transport_str = None
+                result_cache[cache_key] = transport_str
+
+            # 写入 transport_to_next（from_node["source"] 是 ItineraryItem）
+            target_item = from_node["source"]
+            if transport_str:
+                target_item.transport_to_next = transport_str
+                day_filled += 1
+                total_filled += 1
+            else:
+                # 降级：保留模型已有描述或写入通用提示
+                if not target_item.transport_to_next:
+                    target_item.transport_to_next = "建议使用地图软件查询实时路线"
+
+    if total_filled > 0:
+        logger.info(
+            "P3 Transit 补全完成: total_filled=%d/%d",
+            total_filled, _MAX_TRANSIT_TOTAL,
+        )
+    else:
+        logger.info("P3 Transit: 无符合条件的相邻资源对，跳过补全")

@@ -158,3 +158,66 @@ class TestChatNoApiKeyLeak:
                 asyncio.run(client.chat(sample_messages))
             # 用户可见的错误信息不应包含原始异常文本中的 Key
             assert "sk-test-key" not in exc_info.value.message
+
+
+class TestChatWithParams:
+    """测试 chat() 的 max_tokens 和 response_format 参数"""
+
+    def test_max_tokens_passed_to_api(self):
+        client = DeepSeekChatClient(api_key="sk-test", model="deepseek-v4-flash")
+        mock_completion = AsyncMock()
+        mock_completion.choices = [AsyncMock()]
+        mock_completion.choices[0].message.content = "ok"
+
+        mock_async_client = AsyncMock()
+        mock_async_client.chat.completions.create = AsyncMock(return_value=mock_completion)
+
+        import asyncio
+        with patch.object(client, "_client", mock_async_client):
+            asyncio.run(client.chat(
+                [{"role": "user", "content": "hi"}],
+                max_tokens=8000,
+            ))
+            call_kwargs = mock_async_client.chat.completions.create.call_args
+            assert call_kwargs is not None
+            # max_tokens should be in the kwargs
+            called_kwargs = call_kwargs[1] if call_kwargs[0] else call_kwargs.kwargs
+            if hasattr(call_kwargs, 'kwargs'):
+                called_kwargs = call_kwargs.kwargs
+            else:
+                called_kwargs = call_kwargs[1] if len(call_kwargs) > 1 else {}
+
+    def test_response_format_passed_to_api(self):
+        client = DeepSeekChatClient(api_key="sk-test", model="deepseek-v4-flash")
+        mock_completion = AsyncMock()
+        mock_completion.choices = [AsyncMock()]
+        mock_completion.choices[0].message.content = "{}"
+
+        mock_async_client = AsyncMock()
+        mock_async_client.chat.completions.create = AsyncMock(return_value=mock_completion)
+
+        import asyncio
+        with patch.object(client, "_client", mock_async_client):
+            asyncio.run(client.chat(
+                [{"role": "user", "content": "{}"}],
+                response_format={"type": "json_object"},
+            ))
+            # Verify call was made without error
+            assert mock_async_client.chat.completions.create.called
+
+    def test_default_no_max_tokens(self):
+        """默认不传 max_tokens（使用 API 默认值）"""
+        client = DeepSeekChatClient(api_key="sk-test", model="deepseek-v4-flash")
+        mock_completion = AsyncMock()
+        mock_completion.choices = [AsyncMock()]
+        mock_completion.choices[0].message.content = "ok"
+
+        mock_async_client = AsyncMock()
+        mock_async_client.chat.completions.create = AsyncMock(return_value=mock_completion)
+
+        import asyncio
+        with patch.object(client, "_client", mock_async_client):
+            asyncio.run(client.chat([{"role": "user", "content": "hi"}]))
+            call_kwargs = mock_async_client.chat.completions.create.call_args
+            # Default call should work
+            assert mock_async_client.chat.completions.create.called

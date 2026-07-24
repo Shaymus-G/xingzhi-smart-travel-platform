@@ -5,7 +5,7 @@ from xingzhi_ai.plan_schema import StructuredTravelPlan, DayPlan, ItineraryItem,
 
 def _make_valid_plan(days=1) -> dict:
     return {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "title": "Test Plan",
         "destination": {"city_id": 1, "name": "Test City", "province": "Test Province"},
         "days": days,
@@ -56,16 +56,44 @@ class TestStructuredTravelPlan:
         assert plan.days == 3
         assert len(plan.itinerary) == 3
 
-    def test_days_itinerary_mismatch(self):
+    def test_days_itinerary_mismatch_truncates(self):
+        """多余天数自动截断：days=2 但 itinerary 有 3 天 → 截断为 2 天"""
         data = _make_valid_plan(3)
-        data["days"] = 2  # 请求 2 天但 itinerary 有 3 天
-        with pytest.raises(Exception):
-            StructuredTravelPlan.model_validate(data)
+        data["days"] = 2
+        plan = StructuredTravelPlan.model_validate(data)
+        assert plan.days == 2
+        assert len(plan.itinerary) == 2
+        # 原始输入对象不被原地污染（验证后对象是新的）
+        assert len(data["itinerary"]) == 3
 
-    def test_day_numbers_not_sequential(self):
+    def test_day_numbers_auto_sequential(self):
+        """day 编号自动修正：2,1 → 1,2"""
         data = _make_valid_plan(2)
         data["itinerary"][0]["day"] = 2
         data["itinerary"][1]["day"] = 1
+        plan = StructuredTravelPlan.model_validate(data)
+        assert plan.itinerary[0].day == 1
+        assert plan.itinerary[1].day == 2
+
+    def test_fewer_itinerary_than_days_still_validates(self):
+        """itinerary 少于 days 时不补充，直接通过（由业务验证层处理）"""
+        data = _make_valid_plan(2)
+        data["itinerary"] = data["itinerary"][:1]  # 只有 1 天
+        plan = StructuredTravelPlan.model_validate(data)
+        assert plan.days == 2
+        assert len(plan.itinerary) == 1  # Schema 不拒绝也不补全
+
+    def test_empty_itinerary_rejected(self):
+        """空 itinerary 在 Schema 级被拒绝（min_length=1）"""
+        data = _make_valid_plan(1)
+        data["itinerary"] = []
+        with pytest.raises(Exception):
+            StructuredTravelPlan.model_validate(data)
+
+    def test_illegal_resource_type_still_rejected_by_schema(self):
+        """非法 resource_type 仍在 Schema 级拒绝"""
+        data = _make_valid_plan(1)
+        data["itinerary"][0]["items"][0]["resource_type"] = "taxi"
         with pytest.raises(Exception):
             StructuredTravelPlan.model_validate(data)
 

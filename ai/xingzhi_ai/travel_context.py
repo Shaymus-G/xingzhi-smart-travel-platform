@@ -99,6 +99,56 @@ class RestaurantInfo:
 
 
 @dataclass(frozen=True)
+class EntertainmentInfo:
+    """娱乐场所简要信息（P4 新增）"""
+
+    name: str
+    category: str
+    score: Optional[float]
+    price: Optional[float]
+    open_time: str
+    address: str
+    description: str
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "EntertainmentInfo":
+        return cls(
+            name=str(d.get("name", "")),
+            category=str(d.get("category", "")),
+            score=float(d["score"]) if d.get("score") is not None else None,
+            price=float(d["price"]) if d.get("price") is not None else None,
+            open_time=str(d.get("open_time", "")),
+            address=str(d.get("address", "")),
+            description=str(d.get("description", "")),
+        )
+
+
+@dataclass(frozen=True)
+class ShoppingMallInfo:
+    """商场简要信息（P4 新增）"""
+
+    name: str
+    category: str
+    score: Optional[float]
+    price: Optional[float]
+    open_time: str
+    address: str
+    description: str
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ShoppingMallInfo":
+        return cls(
+            name=str(d.get("name", "")),
+            category=str(d.get("category", "")),
+            score=float(d["score"]) if d.get("score") is not None else None,
+            price=float(d["price"]) if d.get("price") is not None else None,
+            open_time=str(d.get("open_time", "")),
+            address=str(d.get("address", "")),
+            description=str(d.get("description", "")),
+        )
+
+
+@dataclass(frozen=True)
 class PreferenceInfo:
     """用户偏好简要信息"""
 
@@ -152,6 +202,8 @@ class TravelContext:
     scenics: tuple[ScenicInfo, ...] = ()
     hotels: tuple[HotelInfo, ...] = ()
     restaurants: tuple[RestaurantInfo, ...] = ()
+    entertainments: tuple[EntertainmentInfo, ...] = ()
+    shopping_malls: tuple[ShoppingMallInfo, ...] = ()
     preferences: tuple[PreferenceInfo, ...] = ()
     weather: Optional[WeatherInfo] = None
 
@@ -162,6 +214,8 @@ class TravelContext:
             or self.scenics
             or self.hotels
             or self.restaurants
+            or self.entertainments
+            or self.shopping_malls
             or self.preferences
             or self.weather
         )
@@ -334,6 +388,40 @@ def build_travel_context_block(context: TravelContext) -> str:
             lines.append(f"   - 简介：{_sanitize_text(desc)}")
         lines.append("")
 
+    # 候选娱乐场所
+    if context.entertainments:
+        lines.append("候选娱乐场所：")
+        for i, ent in enumerate(context.entertainments, 1):
+            lines.append(f"{i}. {_sanitize_text(ent.name)}")
+            if ent.category:
+                lines.append(f"   - 类型：{_sanitize_text(ent.category)}")
+            lines.append(f"   - 评分：{_format_score(ent.score)}")
+            lines.append(f"   - 参考价格：{_format_price(ent.price)}")
+            if ent.open_time:
+                lines.append(f"   - 营业时间：{_sanitize_text(ent.open_time)}")
+            if ent.address:
+                lines.append(f"   - 地址：{_sanitize_text(ent.address)}")
+            desc = _truncate_description(ent.description)
+            lines.append(f"   - 简介：{_sanitize_text(desc)}")
+        lines.append("")
+
+    # 候选商场
+    if context.shopping_malls:
+        lines.append("候选购物场所：")
+        for i, mall in enumerate(context.shopping_malls, 1):
+            lines.append(f"{i}. {_sanitize_text(mall.name)}")
+            if mall.category:
+                lines.append(f"   - 类型：{_sanitize_text(mall.category)}")
+            lines.append(f"   - 评分：{_format_score(mall.score)}")
+            lines.append(f"   - 参考价格：{_format_price(mall.price)}")
+            if mall.open_time:
+                lines.append(f"   - 营业时间：{_sanitize_text(mall.open_time)}")
+            if mall.address:
+                lines.append(f"   - 地址：{_sanitize_text(mall.address)}")
+            desc = _truncate_description(mall.description)
+            lines.append(f"   - 简介：{_sanitize_text(desc)}")
+        lines.append("")
+
     # 天气
     if context.weather:
         w = context.weather
@@ -388,23 +476,28 @@ def build_grounding_rules() -> str:
 3. 不得编造平台数据中不存在的评分、价格、开放时间或具体地址。
    数据缺失时如实说明"平台暂无该数据"。
 
-4. 天气数据缺失时，必须向用户明确说明未获取实时天气，
+4. 娱乐和购物候选数据仅覆盖部分城市。如果某城市没有娱乐或商场候选，
+   向用户说明平台暂无相关数据，不得编造具体娱乐场所或商场。
+
+5. 天气数据缺失时，必须向用户明确说明未获取实时天气，
    不得编造天气状况。
 
-5. 实时价格、开放时间和人流可能随时变化，应提醒用户出行前再次确认。
+6. 实时价格、开放时间和人流可能随时变化，应提醒用户出行前再次确认。
 
-6. 可以给出平台数据之外的通用旅行建议，但要明确区分：
+7. 可以给出平台数据之外的通用旅行建议，但要明确区分：
    - "平台数据显示……"（引用真实数据）
    - "一般建议……"（模型常识）
 
-7. 不要声称已完成任何预订、购买或预约操作。
+8. 不要声称已完成任何预订、购买或预约操作。
 
-8. 不要机械地列出所有候选资源。根据用户需求，从候选中选择最合适的
-   部分进行推荐。
+9. 不要机械地列出所有六类候选资源。根据用户需求，从候选中选择最合适的
+   部分进行推荐。用户问夜生活时优先使用娱乐候选，问购物时优先使用商场候选。
 
-9. 如果用户当前消息表达了明确需求（如"喜欢自然风景"），应优先满足
-   当前需求，其次参考用户历史偏好，最后使用平台热门数据。
+10. "吃住行娱游购"是整体覆盖目标，不要求每一个回复都覆盖全部六方面。
 
-10. 如果用户没有指定目的地城市，不要注入虚假城市数据。可以询问用户
+11. 如果用户当前消息表达了明确需求（如"喜欢自然风景"），应优先满足
+    当前需求，其次参考用户历史偏好，最后使用平台热门数据。
+
+12. 如果用户没有指定目的地城市，不要注入虚假城市数据。可以询问用户
     想去哪里，或给出通用建议。
 """.strip()

@@ -28,6 +28,8 @@ from xingzhi_ai.travel_context import (
     ScenicInfo,
     HotelInfo,
     RestaurantInfo,
+    EntertainmentInfo,
+    ShoppingMallInfo,
     PreferenceInfo,
     WeatherInfo,
     TravelContext,
@@ -50,6 +52,8 @@ DEFAULT_MAX_CONTEXT_CHARS = 8000
 DEFAULT_TOP_SCENICS = 8
 DEFAULT_TOP_HOTELS = 5
 DEFAULT_TOP_RESTAURANTS = 5
+DEFAULT_TOP_ENTERTAINMENTS = 5
+DEFAULT_TOP_MALLS = 5
 DEFAULT_TOP_PREFERENCES = 10
 
 
@@ -202,6 +206,8 @@ def _orm_entertainment_to_dict(ent) -> dict:
         "score": float(ent.score) if getattr(ent, "score", None) is not None else None,
         "price": float(ent.price) if getattr(ent, "price", None) is not None else None,
         "open_time": getattr(ent, "open_time", "") or "",
+        "address": getattr(ent, "address", "") or "",
+        "description": getattr(ent, "description", "") or "",
     }
 
 
@@ -213,6 +219,8 @@ def _orm_mall_to_dict(mall) -> dict:
         "category": getattr(mall, "category", "") or "",
         "score": float(mall.score) if getattr(mall, "score", None) is not None else None,
         "open_time": getattr(mall, "open_time", "") or "",
+        "address": getattr(mall, "address", "") or "",
+        "description": getattr(mall, "description", "") or "",
     }
 
 
@@ -379,7 +387,27 @@ async def generate_ai_reply(
         except Exception:
             logger.warning("餐厅查询失败: city_id=%d", city_id, exc_info=True)
 
-        # 4b. 用户偏好
+        # 4b. 娱乐（P4 新增）
+        entertainments_data: list[dict] = []
+        try:
+            ent_orms = travel_service.get_top_entertainments_by_city(
+                db, city_id, limit=DEFAULT_TOP_ENTERTAINMENTS
+            )
+            entertainments_data = [_orm_entertainment_to_dict(e) for e in ent_orms]
+        except Exception:
+            logger.warning("娱乐查询失败: city_id=%d", city_id, exc_info=True)
+
+        # 4c. 商场（P4 新增）
+        malls_data: list[dict] = []
+        try:
+            mall_orms = travel_service.get_top_malls_by_city(
+                db, city_id, limit=DEFAULT_TOP_MALLS
+            )
+            malls_data = [_orm_mall_to_dict(m) for m in mall_orms]
+        except Exception:
+            logger.warning("商场查询失败: city_id=%d", city_id, exc_info=True)
+
+        # 4d. 用户偏好
         try:
             pref_orms = user_service.get_top_preferences(
                 db, user_id, limit=DEFAULT_TOP_PREFERENCES
@@ -415,27 +443,31 @@ async def generate_ai_reply(
                     "天气查询异常: city=%s", display_city_name, exc_info=True
                 )
 
-        # 4d. 构建 TravelContext（使用用户友好的城市名）
+        # 4e. 构建 TravelContext（使用用户友好的城市名）
         travel_ctx = TravelContext(
             city_name=display_city_name,
             province=province,
             scenics=tuple(ScenicInfo.from_dict(s) for s in scenics),
             hotels=tuple(HotelInfo.from_dict(h) for h in hotels),
             restaurants=tuple(RestaurantInfo.from_dict(r) for r in restaurants),
+            entertainments=tuple(EntertainmentInfo.from_dict(e) for e in entertainments_data),
+            shopping_malls=tuple(ShoppingMallInfo.from_dict(m) for m in malls_data),
             preferences=tuple(PreferenceInfo.from_dict(p) for p in preferences),
             weather=WeatherInfo.from_dict(weather_dict) if weather_dict else None,
         )
 
-        # 4e. 构建旅游数据块
+        # 4f. 构建旅游数据块
         travel_context_block = build_travel_context_block(travel_ctx)
 
         logger.info(
             "P2 旅游上下文构建完成: city=%s scenics=%d hotels=%d restaurants=%d "
-            "preferences=%d weather=%s block_chars=%d",
+            "entertainments=%d malls=%d preferences=%d weather=%s block_chars=%d",
             display_city_name,
             len(scenics),
             len(hotels),
             len(restaurants),
+            len(entertainments_data),
+            len(malls_data),
             len(preferences),
             "yes" if weather_dict else "no",
             len(travel_context_block),
