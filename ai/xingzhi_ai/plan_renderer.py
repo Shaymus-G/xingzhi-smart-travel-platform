@@ -95,7 +95,7 @@ def render_travel_plan_markdown(plan: StructuredTravelPlan) -> str:
     if plan.travelers > 1:
         lines.append(f"- **人数**：{plan.travelers} 人")
     budget = plan.budget
-    if budget.requested_total:
+    if budget.requested_total is not None:
         lines.append(f"- **预算**：¥{budget.requested_total:.0f}")
     lines.append(f"- **预估总费用**：¥{budget.estimated_total:.0f}")
     lines.append("")
