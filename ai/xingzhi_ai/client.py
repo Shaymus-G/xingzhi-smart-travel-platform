@@ -57,12 +57,17 @@ class DeepSeekChatClient:
         self,
         messages: list[ChatMessage],
         temperature: float = 0.7,
+        max_tokens: int | None = None,
+        response_format: dict | None = None,
     ) -> str:
         """调用 DeepSeek Chat API 并返回助手回复文本。
 
         Args:
             messages: 完整的消息列表（含 system / 历史 / 当前用户）。
-            temperature: 生成温度，默认 0.7。
+            temperature: 生成温度，默认 0.7（普通聊天），计划生成建议 0.1-0.3。
+            max_tokens: 最大输出 token 数，None 使用 API 默认值。
+            response_format: OpenAI 兼容的 response_format 参数，
+                例如 {"type": "json_object"}。
 
         Returns:
             助手回复文本（已去除首尾空白）。
@@ -77,13 +82,20 @@ class DeepSeekChatClient:
             for msg in messages
         ]
 
+        # 构建 API 调用参数
+        api_kwargs: dict = {
+            "model": self._model,
+            "messages": api_messages,
+            "temperature": temperature,
+            "stream": False,
+        }
+        if max_tokens is not None:
+            api_kwargs["max_tokens"] = max_tokens
+        if response_format is not None:
+            api_kwargs["response_format"] = response_format
+
         try:
-            completion = await self._client.chat.completions.create(
-                model=self._model,
-                messages=api_messages,  # type: ignore[arg-type]
-                temperature=temperature,
-                stream=False,
-            )
+            completion = await self._client.chat.completions.create(**api_kwargs)  # type: ignore[arg-type]
         except Exception as exc:
             # 将 OpenAI SDK / 网络 / 超时异常统一转换
             # 不在异常信息中包含原始请求详情
