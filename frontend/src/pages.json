@@ -123,20 +123,20 @@
       {
         "pagePath": "pages/home/home",
         "text": "首页",
-        "iconPath": "static/images/tab-home.png",
-        "selectedIconPath": "static/images/tab-home-active.png"
+        "iconPath": "static/tabbar/tab-home.png",
+        "selectedIconPath": "static/tabbar/tab-home-active.png"
       },
       {
         "pagePath": "pages/ai/chat",
         "text": "AI 助手",
-        "iconPath": "static/images/tab-ai.png",
-        "selectedIconPath": "static/images/tab-ai-active.png"
+        "iconPath": "static/tabbar/tab-ai.png",
+        "selectedIconPath": "static/tabbar/tab-ai-active.png"
       },
       {
         "pagePath": "pages/profile/profile",
         "text": "个人中心",
-        "iconPath": "static/images/tab-profile.png",
-        "selectedIconPath": "static/images/tab-profile-active.png"
+        "iconPath": "static/tabbar/tab-profile.png",
+        "selectedIconPath": "static/tabbar/tab-profile-active.png"
       }
     ]
   },
