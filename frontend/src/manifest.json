@@ -20,6 +20,20 @@
         "modules" : {},
         /* 应用发布信息 */
         "distribute" : {
+            /* App 图标 */
+            "icons" : {
+                "android" : {
+                    "hdpi" : "static/app-icon/app-icon.png",
+                    "xhdpi" : "static/app-icon/app-icon.png",
+                    "xxhdpi" : "static/app-icon/app-icon.png",
+                    "xxxhdpi" : "static/app-icon/app-icon.png"
+                },
+                "ios" : {
+                    "appstore" : "static/app-icon/app-icon.png",
+                    "ipad" : "static/app-icon/app-icon.png",
+                    "iphone" : "static/app-icon/app-icon.png"
+                }
+            },
             /* android打包配置 */
             "android" : {
                 "permissions" : [
