@@ -3,7 +3,7 @@
  * 旅行计划详情页面 — 使用 normalizer 安全渲染 plan_json
  */
 import { ref } from 'vue'
-import { onLoad } from '@dcloudio/uni-app'
+import { onLoad, onUnload } from '@dcloudio/uni-app'
 import NavBar from '@/components/NavBar.vue'
 import { getPlanDetail, deletePlan } from '@/api/travel'
 import type { TravelPlan } from '@/types/travel'
@@ -22,6 +22,18 @@ import type { TravelResourceType } from '@/types/resource'
 import { isNavigableResourceType } from '@/types/resource'
 import type { TransitEndpointType } from '@/types/transit'
 import TransitRoutePanel from '@/components/TransitRoutePanel.vue'
+import {
+  normalizeLocation,
+  buildSearchKeyword,
+  buildAmapViewUrl,
+  buildAmapNavigationUrl,
+  buildAmapWebUrl,
+  openExternalUrl,
+  copyLocationInfo,
+  fetchResourceCoordinates,
+  clearResourceCache,
+} from '@/utils/amap'
+import type { MapAction } from '@/utils/amap'
 
 // ========== 错误类型 ==========
 type PlanLoadError = 'invalidId' | 'notFound' | 'network' | 'unknown'
@@ -37,7 +49,137 @@ const isDeleting = ref(false)
 let _loading = false   // 并发锁
 let _loadSeq = 0       // 请求序号（诊断用）
 
+// ========== 地图入口 ==========
+
+/** 正在查询坐标的节点 key */
+const mapLoadingKeys = ref<Set<string>>(new Set())
+
+function nodeKey(kind: string, dayIndex: number, itemIndex: number): string {
+  return `${kind}:${dayIndex}:${itemIndex}`
+}
+
+/** 构建地点信息对象 */
+function buildLocationInfo(
+  item: PlanTimelineItem | PlanMeal | PlanHotel,
+): { name: string; address: string | null; city: string | null; lat: number | null; lng: number | null } {
+  return {
+    name: item.name,
+    address: 'address' in item ? (item.address ?? null) : null,
+    city: 'city' in item ? (item.city ?? null) : null,
+    lat: 'latitude' in item ? (item.latitude ?? null) : null,
+    lng: 'longitude' in item ? (item.longitude ?? null) : null,
+  }
+}
+
+/**
+ * 地图按钮点击处理
+ *
+ * 三层降级：
+ *   1. 节点自带坐标 → 直接打开高德
+ *   2. resource_type + resource_id → 延迟查询资源详情
+ *   3. 名称 + 地址 + 城市 → 高德搜索
+ */
+async function handleOpenMap(
+  item: PlanTimelineItem | PlanMeal | PlanHotel,
+  dayIndex: number,
+  itemIndex: number,
+): Promise<void> {
+  const key = nodeKey('map', dayIndex, itemIndex)
+  if (mapLoadingKeys.value.has(key)) return
+
+  const info = buildLocationInfo(item)
+
+  // 第一优先级：节点自带坐标
+  const directLoc = normalizeLocation(info.lat, info.lng)
+
+  if (directLoc) {
+    showMapActionSheet(info.name, info.address, info.city, directLoc)
+    return
+  }
+
+  // 第二优先级：延迟查询资源详情
+  if (
+    isNavigableResourceType(item.resource_type) &&
+    item.resource_id !== null &&
+    item.resource_id > 0
+  ) {
+    const newSet = new Set(mapLoadingKeys.value)
+    newSet.add(key)
+    mapLoadingKeys.value = newSet
+
+    try {
+      const detail = await fetchResourceCoordinates(item.resource_type, item.resource_id)
+      if (detail) {
+        const loc = normalizeLocation(detail.latitude, detail.longitude)
+        const detailCity = detail.city || info.city
+        const detailAddr = detail.address || info.address
+        showMapActionSheet(info.name, detailAddr, detailCity, loc)
+        return
+      }
+    } catch {
+      // 查询失败 → 降级到搜索
+    } finally {
+      const newSet2 = new Set(mapLoadingKeys.value)
+      newSet2.delete(key)
+      mapLoadingKeys.value = newSet2
+    }
+  }
+
+  // 第三优先级：名称搜索
+  const fallbackCity = info.city || normalizedPlan.value?.destination?.name || null
+  showMapActionSheet(info.name, info.address, fallbackCity, null)
+}
+
+/** 显示操作菜单 */
+function showMapActionSheet(
+  name: string,
+  address: string | null,
+  city: string | null,
+  loc: { latitude: number; longitude: number } | null,
+): void {
+  const keyword = buildSearchKeyword(name, address, city, normalizedPlan.value?.destination?.name ?? null)
+  const itemList: string[] = loc
+    ? ['查看地点', '从当前位置前往']
+    : ['在高德地图中搜索']
+
+  uni.showActionSheet({
+    itemList,
+    success(res) {
+      let action: MapAction = 'view'
+      if (loc && res.tapIndex === 1) {
+        action = 'navigate'
+      }
+      openMapUrl(action, loc, keyword, name, address)
+    },
+  })
+}
+
+/** 打开地图 URL */
+function openMapUrl(
+  action: MapAction,
+  loc: { latitude: number; longitude: number } | null,
+  keyword: string,
+  name: string,
+  address: string | null,
+): void {
+  const viewUrl = buildAmapViewUrl(loc, keyword)
+  const webUrl = buildAmapWebUrl(loc, keyword)
+  let appUrl = viewUrl
+
+  if (action === 'navigate' && loc) {
+    const navUrl = buildAmapNavigationUrl(loc, keyword)
+    if (navUrl) appUrl = navUrl
+  }
+
+  // 打开中：openExternalUrl 内部有三级降级（URI → Web → 复制）
+  openExternalUrl(appUrl, webUrl, `${name} ${address || ''}`.trim())
+}
+
 // ========== 生命周期 ==========
+onUnload(() => {
+  clearResourceCache()
+})
+
 onLoad((options: Record<string, string> | undefined) => {
   if (import.meta.env.DEV) {
     console.log('[plan-detail] onLoad fired', { options, timestamp: Date.now() })
@@ -399,7 +541,14 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
                 <text class="tl-meta" v-if="item.start_time || item.end_time">
                   ⏰ {{ item.start_time || '?' }} - {{ item.end_time || '?' }}
                 </text>
-                <text class="tl-meta" v-if="item.address">📍 {{ item.address }}</text>
+                <view class="tl-address-row" v-if="item.address || item.name">
+                  <text class="tl-meta" v-if="item.address">📍 {{ item.address }}</text>
+                  <text
+                    class="tl-map-btn"
+                    :class="{ loading: mapLoadingKeys.has(nodeKey('item', di, ii)) }"
+                    @tap.stop="handleOpenMap(item, di, ii)"
+                  >{{ mapLoadingKeys.has(nodeKey('item', di, ii)) ? '查询中...' : '🗺️ 地图' }}</text>
+                </view>
                 <text class="tl-meta" v-if="item.duration_minutes !== null">
                   ⏱️ {{ item.duration_minutes }} 分钟
                 </text>
@@ -447,7 +596,14 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
               :class="{ 'tl-name-link': canOpenResource(day.hotel.resource_type, day.hotel.resource_id) }"
               @tap="canOpenResource(day.hotel.resource_type, day.hotel.resource_id) && handleResourceTap(day.hotel.resource_type, day.hotel.resource_id)"
             >{{ day.hotel.name }}</text>
-            <text class="tl-meta" v-if="day.hotel.address">📍 {{ day.hotel.address }}</text>
+            <view class="tl-address-row" v-if="day.hotel.address || day.hotel.name">
+              <text class="tl-meta" v-if="day.hotel.address">📍 {{ day.hotel.address }}</text>
+              <text
+                class="tl-map-btn"
+                :class="{ loading: mapLoadingKeys.has(nodeKey('hotel', di, 0)) }"
+                @tap.stop="handleOpenMap(day.hotel, di, 0)"
+              >{{ mapLoadingKeys.has(nodeKey('hotel', di, 0)) ? '查询中...' : '🗺️ 地图' }}</text>
+            </view>
             <text class="tl-cost" v-if="day.hotel.estimated_cost !== null">💰 {{ fmtCost(day.hotel.estimated_cost) }}</text>
           </view>
 
@@ -713,6 +869,34 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
   color: #999;
   display: block;
   margin-top: 4rpx;
+}
+
+// Map button
+.tl-address-row {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  margin-top: 4rpx;
+
+  .tl-meta {
+    margin-top: 0;
+    flex: 1;
+  }
+}
+
+.tl-map-btn {
+  font-size: 22rpx;
+  color: #4A90D9;
+  padding: 4rpx 12rpx;
+  border: 1rpx solid #4A90D9;
+  border-radius: 8rpx;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.tl-map-btn.loading {
+  color: #999;
+  border-color: #ccc;
 }
 
 .tl-cost {
