@@ -28,12 +28,18 @@ import {
   buildAmapViewUrl,
   buildAmapNavigationUrl,
   buildAmapWebUrl,
+  buildAmapRouteUrl,
+  buildAmapRouteWebUrl,
+  mapTransitMethodToAmapMode,
   openExternalUrl,
+  preopenBlankWindow,
+  setOpenedWindowUrl,
   copyLocationInfo,
   fetchResourceCoordinates,
   clearResourceCache,
+  resolveRouteEndpoints,
 } from '@/utils/amap'
-import type { MapAction } from '@/utils/amap'
+import type { AmapLocation, MapAction } from '@/utils/amap'
 
 // ========== 错误类型 ==========
 type PlanLoadError = 'invalidId' | 'notFound' | 'network' | 'unknown'
@@ -54,8 +60,134 @@ let _loadSeq = 0       // 请求序号（诊断用）
 /** 正在查询坐标的节点 key */
 const mapLoadingKeys = ref<Set<string>>(new Set())
 
+/** 正在加载高德路线的段 key */
+const routeLoadingKeys = ref<Set<string>>(new Set())
+
 function nodeKey(kind: string, dayIndex: number, itemIndex: number): string {
   return `${kind}:${dayIndex}:${itemIndex}`
+}
+
+function routeKey(dayIndex: number, itemIndex: number): string {
+  return `route:${dayIndex}:${itemIndex}`
+}
+
+/** 将 PlanTimelineItem 转为 AmapLocation */
+function toAmapLocation(item: PlanTimelineItem): AmapLocation {
+  return {
+    name: item.name,
+    address: item.address,
+    city: item.city,
+    latitude: item.latitude,
+    longitude: item.longitude,
+    resourceType: item.resource_type !== 'unknown' ? item.resource_type : null,
+    resourceId: item.resource_id,
+  }
+}
+
+/**
+ * 处理 TransitRoutePanel 发出的高德路线事件
+ */
+async function handleOpenAmapRoute(
+  fromItem: PlanTimelineItem,
+  toItem: PlanTimelineItem,
+  dayIndex: number,
+  itemIndex: number,
+  payload: { method: string },
+): Promise<void> {
+  const method = payload?.method || 'driving'
+  const key = routeKey(dayIndex, itemIndex)
+
+  if (import.meta.env.DEV) {
+    console.log('[amap-route] parent handler entered', {
+      from: fromItem.name,
+      to: toItem.name,
+      dayIndex,
+      itemIndex,
+      method,
+    })
+  }
+
+  if (routeLoadingKeys.value.has(key)) return
+
+  // 同步设置 loading（必须在任何 await 之前）
+  const newSet = new Set(routeLoadingKeys.value)
+  newSet.add(key)
+  routeLoadingKeys.value = newSet
+
+  // H5：在用户点击同步栈中预开空白窗口（防止浏览器拦截异步 window.open）
+  // #ifdef H5
+  const pendingWindow = preopenBlankWindow()
+  // #endif
+
+  try {
+    if (import.meta.env.DEV) {
+      console.log('[amap-route] endpoints resolving')
+    }
+    const fromLoc = toAmapLocation(fromItem)
+    const toLoc = toAmapLocation(toItem)
+    const [fromCoord, toCoord] = await resolveRouteEndpoints(fromLoc, toLoc)
+
+    if (!routeLoadingKeys.value.has(key)) return
+
+    if (import.meta.env.DEV) {
+      console.log('[amap-route] endpoints resolved', {
+        fromOk: fromCoord !== null,
+        toOk: toCoord !== null,
+      })
+    }
+
+    if (!fromCoord || !toCoord) {
+      const missingName = !fromCoord ? fromItem.name : toItem.name
+      // #ifdef H5
+      if (pendingWindow && !pendingWindow.closed) pendingWindow.close()
+      // #endif
+      uni.showToast({
+        title: `"${missingName}"缺少有效坐标，无法生成精确路线`,
+        icon: 'none',
+        duration: 3000,
+      })
+      // 同时复制路线信息作为备用
+      uni.setClipboardData({
+        data: `${fromItem.name} → ${toItem.name}`,
+        showToast: false,
+      })
+      return
+    }
+
+    const mode = mapTransitMethodToAmapMode(method)
+    const appUrl = buildAmapRouteUrl(fromCoord, fromItem.name, toCoord, toItem.name, mode)
+    const webUrl = buildAmapRouteWebUrl(fromCoord, fromItem.name, toCoord, toItem.name, mode)
+
+    if (import.meta.env.DEV) {
+      console.log('[amap-route] URL built', { mode })
+    }
+
+    // #ifdef H5
+    if (pendingWindow && !pendingWindow.closed) {
+      setOpenedWindowUrl(pendingWindow, webUrl)
+    } else {
+      openExternalUrl(appUrl, webUrl, `${fromItem.name} → ${toItem.name}`)
+    }
+    // #endif
+    // #ifdef APP-PLUS
+    openExternalUrl(appUrl, webUrl, `${fromItem.name} → ${toItem.name}`)
+    // #endif
+  } catch (err: unknown) {
+    if (!routeLoadingKeys.value.has(key)) return
+    // #ifdef H5
+    if (pendingWindow && !pendingWindow.closed) pendingWindow.close()
+    // #endif
+    const msg = err instanceof Error ? err.message : '路线打开失败'
+    uni.showToast({ title: msg, icon: 'none', duration: 3000 })
+    uni.setClipboardData({
+      data: `${fromItem.name} → ${toItem.name}`,
+      showToast: false,
+    })
+  } finally {
+    const newSet2 = new Set(routeLoadingKeys.value)
+    newSet2.delete(key)
+    routeLoadingKeys.value = newSet2
+  }
 }
 
 /** 构建地点信息对象 */
@@ -541,14 +673,7 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
                 <text class="tl-meta" v-if="item.start_time || item.end_time">
                   ⏰ {{ item.start_time || '?' }} - {{ item.end_time || '?' }}
                 </text>
-                <view class="tl-address-row" v-if="item.address || item.name">
-                  <text class="tl-meta" v-if="item.address">📍 {{ item.address }}</text>
-                  <text
-                    class="tl-map-btn"
-                    :class="{ loading: mapLoadingKeys.has(nodeKey('item', di, ii)) }"
-                    @tap.stop="handleOpenMap(item, di, ii)"
-                  >{{ mapLoadingKeys.has(nodeKey('item', di, ii)) ? '查询中...' : '🗺️ 地图' }}</text>
-                </view>
+                <text class="tl-meta" v-if="item.address">📍 {{ item.address }}</text>
                 <text class="tl-meta" v-if="item.duration_minutes !== null">
                   ⏱️ {{ item.duration_minutes }} 分钟
                 </text>
@@ -560,7 +685,7 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
                   🚗 {{ item.transport_to_next }}
                 </text>
 
-                <!-- 实时路线 -->
+                <!-- 实时路线 + 高德两点路线 -->
                 <TransitRoutePanel
                   v-if="getTransitSegment(day.items, ii)"
                   :origin-type="getTransitSegment(day.items, ii)!.originType"
@@ -570,6 +695,14 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
                   :destination-id="getTransitSegment(day.items, ii)!.destinationId"
                   :destination-name="getTransitSegment(day.items, ii)!.destinationName"
                   :city="transitCity()"
+                  :amap-loading="routeLoadingKeys.has(routeKey(di, ii))"
+                  @open-amap-route="handleOpenAmapRoute(
+                    day.items[ii],
+                    day.items[ii + 1],
+                    di,
+                    ii,
+                    $event
+                  )"
                 />
               </view>
             </view>
@@ -714,6 +847,8 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
   border-radius: 16rpx;
   padding: 24rpx;
   margin-bottom: 20rpx;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .info-title {
@@ -837,18 +972,25 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
 
 .timeline-content {
   flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .tl-header {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
+  min-width: 0;
 }
 
 .tl-name {
   font-size: 28rpx;
   font-weight: 600;
   color: #333;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .tl-name-link {
@@ -862,6 +1004,8 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
   background: #f0f0f0;
   padding: 2rpx 12rpx;
   border-radius: 8rpx;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .tl-meta {
@@ -877,10 +1021,14 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
   align-items: center;
   gap: 16rpx;
   margin-top: 4rpx;
+  min-width: 0;
 
   .tl-meta {
     margin-top: 0;
     flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 }
 

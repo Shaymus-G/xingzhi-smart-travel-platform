@@ -29,15 +29,18 @@ export interface ValidLocation {
   longitude: number
 }
 
-/** 地点信息，用于地图打开 */
-export interface MapLocationInfo {
+/** 统一地点模型，用于单点和两点路线解析 */
+export interface AmapLocation {
   name: string
-  address: string | null
-  city: string | null
-  location: ValidLocation | null
+  address?: string | null
+  city?: string | null
+  latitude?: number | string | null
+  longitude?: number | string | null
+  resourceType?: string | null
+  resourceId?: number | null
 }
 
-/** 高德地图操作选项 */
+/** 高德地图操作选项（单点用） */
 export type MapAction = 'view' | 'navigate'
 
 // ==================== 坐标验证 ====================
@@ -196,6 +199,124 @@ export function buildAmapWebUrl(loc: ValidLocation | null, keyword: string): str
   return `https://uri.amap.com/search?keyword=${encoded}&src=${AMAP_SRC}`
 }
 
+// ==================== 两点路线 ====================
+
+/** 高德路线出行方式 */
+export type AmapRouteMode = 'bus' | 'car' | 'walk' | 'ride'
+
+/**
+ * 将 TransitMethod 映射为高德路线模式
+ *
+ * transit → bus / driving → car / walking → walk / bicycling → ride
+ * 未知方式降级为 car 并输出日志。
+ */
+export function mapTransitMethodToAmapMode(method: string): AmapRouteMode {
+  switch (method) {
+    case 'transit':   return 'bus'
+    case 'driving':   return 'car'
+    case 'walking':   return 'walk'
+    case 'bicycling': return 'ride'
+    default:
+      if (import.meta.env.DEV) {
+        console.warn('[amap] unknown transit method, fallback to car:', method)
+      }
+      return 'car'
+  }
+}
+
+/**
+ * 构造两点路线 navigation URL
+ *
+ * 高德参数顺序：from=lng,lat,name&to=lng,lat,name&mode=xxx
+ * 使用 URLSearchParams 安全编码，避免手动拼接未转义文本。
+ */
+export function buildAmapRouteUrl(
+  from: ValidLocation,
+  fromName: string,
+  to: ValidLocation,
+  toName: string,
+  mode: AmapRouteMode,
+): string {
+  const params = new URLSearchParams()
+  params.set('from', `${from.longitude},${from.latitude},${fromName.slice(0, 50)}`)
+  params.set('to', `${to.longitude},${to.latitude},${toName.slice(0, 50)}`)
+  params.set('mode', mode)
+  params.set('src', AMAP_SRC)
+  params.set('callnative', '1')
+  return `https://uri.amap.com/navigation?${params.toString()}`
+}
+
+/**
+ * 构造两点路线 Web 降级 URL（H5 浏览器用，不带 callnative）
+ */
+export function buildAmapRouteWebUrl(
+  from: ValidLocation,
+  fromName: string,
+  to: ValidLocation,
+  toName: string,
+  mode: AmapRouteMode,
+): string {
+  const params = new URLSearchParams()
+  params.set('from', `${from.longitude},${from.latitude},${fromName.slice(0, 50)}`)
+  params.set('to', `${to.longitude},${to.latitude},${toName.slice(0, 50)}`)
+  params.set('mode', mode)
+  params.set('src', AMAP_SRC)
+  return `https://uri.amap.com/navigation?${params.toString()}`
+}
+
+// ==================== 地点坐标解析 ====================
+
+/**
+ * 解析单个 AmapLocation 的坐标
+ *
+ * 三层降级：
+ *   1. 自带坐标 (latitude/longitude)
+ *   2. resourceType + resourceId → 查询资源详情
+ *   3. 无法取得 → null
+ *
+ * 复用页面级缓存，不重复查询同一资源。
+ */
+export async function resolveAmapLocation(
+  loc: AmapLocation,
+): Promise<ValidLocation | null> {
+  // 第一优先级：自带坐标
+  const directLoc = normalizeLocation(loc.latitude, loc.longitude)
+  if (directLoc) return directLoc
+
+  // 第二优先级：查询资源详情
+  if (
+    loc.resourceType &&
+    loc.resourceId &&
+    isNavigableResourceType(loc.resourceType) &&
+    Number.isInteger(loc.resourceId) &&
+    loc.resourceId > 0
+  ) {
+    const detail = await fetchResourceCoordinates(loc.resourceType, loc.resourceId)
+    if (detail) {
+      const detailLoc = normalizeLocation(detail.latitude, detail.longitude)
+      if (detailLoc) return detailLoc
+    }
+  }
+
+  return null
+}
+
+/**
+ * 并行解析起点和终点坐标
+ *
+ * 返回 [fromLoc, toLoc]，任一为 null 表示该端解析失败。
+ */
+export async function resolveRouteEndpoints(
+  fromLoc: AmapLocation,
+  toLoc: AmapLocation,
+): Promise<[ValidLocation | null, ValidLocation | null]> {
+  const [from, to] = await Promise.all([
+    resolveAmapLocation(fromLoc),
+    resolveAmapLocation(toLoc),
+  ])
+  return [from, to]
+}
+
 // ==================== 平台感知打开 ====================
 
 /** 是否在 App 环境（app-plus） */
@@ -209,17 +330,29 @@ function isAppEnv(): boolean {
 /**
  * 打开外部 URL
  *
- * App: plus.runtime.openURL → 失败降级 webUrl
- * H5: window.open → 失败降级 复制链接
+ * App: plus.runtime.openURL → 失败降级 webUrl → 复制链接
+ * H5: 预先打开空白窗口（保留用户手势上下文） → 异步解析后赋值 URL
+ *     若预开失败（弹窗被拦截）→ 当前页跳转 webUrl
  */
 export function openExternalUrl(appUrl: string, webUrl: string, fallbackText: string): void {
+  if (import.meta.env.DEV) {
+    console.log('[amap] openExternalUrl', { platform: isAppEnv() ? 'app' : 'h5' })
+  }
+
   if (isAppEnv()) {
     // #ifdef APP-PLUS
+    if (import.meta.env.DEV) {
+      console.log('[amap] open native URI')
+    }
     plus.runtime.openURL(appUrl, (err?: { code?: number; message?: string }) => {
-      // 打开失败 → 降级到 Web URL
       if (err) {
+        if (import.meta.env.DEV) {
+          console.log('[amap] native URI failed, fallback to web')
+        }
         plus.runtime.openURL(webUrl, () => {
-          // Web 也失败 → 复制链接
+          if (import.meta.env.DEV) {
+            console.log('[amap] web open failed, copy link')
+          }
           uni.setClipboardData({
             data: webUrl,
             success: () => {
@@ -233,11 +366,45 @@ export function openExternalUrl(appUrl: string, webUrl: string, fallbackText: st
     return
   }
 
-  // H5 / 小程序：window.open
-  const win = window.open(appUrl, '_blank')
-  if (!win) {
-    // 弹窗被阻止 → 降级为当前页跳转
-    window.location.href = webUrl
+  // H5：当前页直接跳转 webUrl（避免异步 window.open 被浏览器拦截）
+  // 不使用 await 后的 window.open，因为浏览器会拦截非用户手势触发的弹窗
+  if (import.meta.env.DEV) {
+    console.log('[amap] H5: navigate to web URL')
+  }
+  window.location.assign(webUrl)
+}
+
+/**
+ * 预开空白窗口 — 在用户点击同步栈中调用，保留手势上下文
+ *
+ * 返回 Window 对象或 null（被拦截）。
+ * 异步解析完成后调用 setOpenedWindowUrl() 赋值。
+ */
+export function preopenBlankWindow(): Window | null {
+  // #ifdef H5
+  const win = window.open('', '_blank')
+  if (!win && import.meta.env.DEV) {
+    console.log('[amap] preopen blank window blocked')
+  }
+  return win
+  // #endif
+  return null
+}
+
+/**
+ * 向预开的空白窗口设置 URL
+ */
+export function setOpenedWindowUrl(win: Window | null, url: string): void {
+  if (win && !win.closed) {
+    try {
+      win.location.href = url
+    } catch {
+      // 跨域或其他异常 → 降级到当前页
+      window.location.assign(url)
+    }
+  } else {
+    // 窗口已被关闭或被拦截 → 当前页跳转
+    window.location.assign(url)
   }
 }
 
