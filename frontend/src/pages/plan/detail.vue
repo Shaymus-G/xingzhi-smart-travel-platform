@@ -40,6 +40,7 @@ import {
   resolveRouteEndpoints,
 } from '@/utils/amap'
 import type { AmapLocation, MapAction } from '@/utils/amap'
+import { buildFullPlanShareText, buildDayShareText, shareText, copyShareText } from '@/utils/plan-share'
 
 // ========== 错误类型 ==========
 type PlanLoadError = 'invalidId' | 'notFound' | 'network' | 'unknown'
@@ -493,6 +494,48 @@ function goRegenerate(): void {
   uni.navigateTo({ url: `/pages/plan/generate?${params.join('&')}` })
 }
 
+// ========== 分享 ==========
+
+/** 分享完整计划 */
+function handleShareFullPlan(): void {
+  if (!plan.value || !normalizedPlan.value) return
+
+  uni.showActionSheet({
+    itemList: ['系统分享', '复制行程文本'],
+    success(res) {
+      const text = buildFullPlanShareText(plan.value!, normalizedPlan.value!)
+      const title = normalizedPlan.value?.title || plan.value?.title || '旅行计划'
+      if (res.tapIndex === 0) {
+        void shareText(title, text)
+      } else {
+        void copyShareText(text)
+      }
+    },
+  })
+}
+
+/** 分享单日行程 */
+function handleShareDay(dayIndex: number): void {
+  if (!normalizedPlan.value) return
+  const day = normalizedPlan.value.itinerary[dayIndex]
+  if (!day) return
+
+  const destName = normalizedPlan.value.destination.name || plan.value?.destination || ''
+
+  uni.showActionSheet({
+    itemList: ['系统分享', '复制行程文本'],
+    success(res) {
+      const text = buildDayShareText(day, destName)
+      const title = `${destName}第 ${day.day} 天行程`
+      if (res.tapIndex === 0) {
+        void shareText(title, text)
+      } else {
+        void copyShareText(text)
+      }
+    },
+  })
+}
+
 // ========== 展示常量 ==========
 const PERIOD_LABELS: Record<string, string> = {
   morning: '上午',
@@ -650,8 +693,11 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
 
         <view v-for="(day, di) in normalizedPlan.itinerary" :key="di" class="day-card">
           <view class="day-header">
-            <text class="day-num">第 {{ day.day }} 天</text>
-            <text class="day-theme" v-if="day.theme">{{ day.theme }}</text>
+            <view class="day-header-left">
+              <text class="day-num">第 {{ day.day }} 天</text>
+              <text class="day-theme" v-if="day.theme">{{ day.theme }}</text>
+            </view>
+            <text class="day-share-btn" @tap.stop="handleShareDay(di)">分享当天</text>
           </view>
 
           <text class="day-summary" v-if="day.summary">{{ day.summary }}</text>
@@ -790,6 +836,9 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
 
       <!-- 操作区 -->
       <view class="detail-actions">
+        <view class="detail-action-btn" @tap="handleShareFullPlan">
+          <text>分享计划</text>
+        </view>
         <view class="detail-action-btn" @tap="goRegenerate">
           <text>重新生成</text>
         </view>
@@ -914,8 +963,17 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
 .day-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 16rpx;
   margin-bottom: 12rpx;
+}
+
+.day-header-left {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  min-width: 0;
+  flex: 1;
 }
 
 .day-num {
@@ -924,12 +982,28 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
   font-size: 24rpx;
   padding: 4rpx 16rpx;
   border-radius: 8rpx;
+  flex-shrink: 0;
 }
 
 .day-theme {
   font-size: 28rpx;
   font-weight: 600;
   color: #333;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// Day share button
+.day-share-btn {
+  font-size: 24rpx;
+  color: #4A90D9;
+  padding: 6rpx 16rpx;
+  border: 1rpx solid #4A90D9;
+  border-radius: 8rpx;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .day-summary {
