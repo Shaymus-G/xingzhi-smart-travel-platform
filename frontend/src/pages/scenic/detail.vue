@@ -115,6 +115,7 @@ onReady(() => {
           v-if="scenic && scenicId > 0"
           target-type="scenic_spot"
           :target-id="scenicId"
+          horizontal-padding="32rpx"
         />
       </template>
 
