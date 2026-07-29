@@ -677,11 +677,16 @@ function parseIntegerInRange(value: unknown, min: number, max: number): number |
   display: flex;
   flex-direction: column;
   background: #f5f5f5;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .form-scroll {
   flex: 1;
   padding: 24rpx 32rpx;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .form-group {
@@ -689,6 +694,9 @@ function parseIntegerInRange(value: unknown, min: number, max: number): number |
   border-radius: 16rpx;
   padding: 24rpx;
   margin-bottom: 20rpx;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .form-label {
@@ -697,6 +705,8 @@ function parseIntegerInRange(value: unknown, min: number, max: number): number |
   font-weight: 600;
   margin-bottom: 16rpx;
   display: block;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .required {
@@ -704,11 +714,14 @@ function parseIntegerInRange(value: unknown, min: number, max: number): number |
 }
 
 .form-input {
+  width: 100%;
   height: 72rpx;
   background: #f8f8f8;
   border-radius: 12rpx;
   padding: 0 20rpx;
   font-size: 28rpx;
+  box-sizing: border-box;
+  max-width: 100%;
 }
 
 .picker-input {
@@ -724,6 +737,7 @@ function parseIntegerInRange(value: unknown, min: number, max: number): number |
   display: flex;
   align-items: center;
   gap: 24rpx;
+  min-width: 0;
 }
 
 .stepper-btn {
@@ -737,6 +751,7 @@ function parseIntegerInRange(value: unknown, min: number, max: number): number |
   align-items: center;
   justify-content: center;
   border: none;
+  flex-shrink: 0;
 }
 
 .stepper-btn[disabled] {
@@ -748,12 +763,14 @@ function parseIntegerInRange(value: unknown, min: number, max: number): number |
   font-weight: 700;
   min-width: 60rpx;
   text-align: center;
+  flex-shrink: 0;
 }
 
 .tag-grid {
   display: flex;
   flex-wrap: wrap;
   gap: 16rpx;
+  min-width: 0;
 }
 
 .pref-tag {
@@ -763,6 +780,7 @@ function parseIntegerInRange(value: unknown, min: number, max: number): number |
   font-size: 26rpx;
   color: #666;
   border: 2rpx solid transparent;
+  flex-shrink: 0;
 }
 
 .pref-tag.active {
@@ -773,6 +791,7 @@ function parseIntegerInRange(value: unknown, min: number, max: number): number |
 
 .form-textarea {
   width: 100%;
+  max-width: 100%;
   min-height: 160rpx;
   background: #f8f8f8;
   border-radius: 12rpx;
@@ -793,10 +812,13 @@ function parseIntegerInRange(value: unknown, min: number, max: number): number |
   padding: 20rpx 32rpx;
   background: #fff;
   border-top: 1rpx solid #eee;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .generate-btn {
   width: 100%;
+  max-width: 100%;
   height: 88rpx;
   background: #4A90D9;
   color: #fff;
@@ -807,6 +829,8 @@ function parseIntegerInRange(value: unknown, min: number, max: number): number |
   align-items: center;
   justify-content: center;
   text-align: center;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
 }
 
 .generate-btn[disabled] {

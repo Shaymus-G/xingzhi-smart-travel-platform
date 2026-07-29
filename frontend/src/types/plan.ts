@@ -12,6 +12,40 @@
 
 import type { NormalizedResourceType } from './resource'
 
+// ==================== 地点坐标绑定类型（P5） ====================
+
+/**
+ * 地点坐标匹配状态
+ *
+ * - `matched`   — 后端成功匹配到平台资源，坐标可信
+ * - `not_found` — 后端未匹配到对应地点，不应作为精确坐标使用
+ * - `ambiguous` — 存在多个可能匹配，不确定具体地点
+ * - `null`      — 未执行匹配（历史计划或新字段缺失）
+ *
+ * 兼容性：后端未来可能增加新枚举值，前端对未知值降级为 null。
+ */
+export type LocationMatchStatus =
+  | 'matched'
+  | 'not_found'
+  | 'ambiguous'
+  | null
+
+/**
+ * 地点坐标匹配来源
+ *
+ * - `resource_database` — 从平台资源数据库中匹配
+ * - `external_poi`      — 从外部 POI 服务匹配（如高德）
+ * - `manual`            — 人工标注
+ * - `none`              — 无匹配来源
+ * - `null`              — 未设置（历史兼容）
+ */
+export type LocationMatchSource =
+  | 'resource_database'
+  | 'external_poi'
+  | 'manual'
+  | 'none'
+  | null
+
 // ==================== Schema 版本 ====================
 
 /** 已知的 PlanJSON Schema 版本 */
@@ -118,6 +152,10 @@ export interface PlanTimelineItem {
   poi_id: string | null
   /** 坐标系标识，如 "GCJ-02"；缺失时前端不假定坐标系 */
   coordinate_system: string | null
+  /** 坐标匹配状态（P5）；历史计划为 null */
+  location_match_status: LocationMatchStatus
+  /** 坐标匹配来源（P5）；历史计划为 null */
+  location_match_source: LocationMatchSource
 }
 
 /** 用餐信息 */
@@ -137,6 +175,12 @@ export interface PlanMeal {
   longitude: number | null
   /** 所在城市名 */
   city: string | null
+  /** 坐标系标识（P5）；历史计划为 null */
+  coordinate_system: string | null
+  /** 坐标匹配状态（P5）；历史计划为 null */
+  location_match_status: LocationMatchStatus
+  /** 坐标匹配来源（P5）；历史计划为 null */
+  location_match_source: LocationMatchSource
 }
 
 /** 住宿信息 */
@@ -156,6 +200,12 @@ export interface PlanHotel {
   longitude: number | null
   /** 所在城市名 */
   city: string | null
+  /** 坐标系标识（P5）；历史计划为 null */
+  coordinate_system: string | null
+  /** 坐标匹配状态（P5）；历史计划为 null */
+  location_match_status: LocationMatchStatus
+  /** 坐标匹配来源（P5）；历史计划为 null */
+  location_match_source: LocationMatchSource
 }
 
 /** 规范化后的完整结构化旅行计划 */

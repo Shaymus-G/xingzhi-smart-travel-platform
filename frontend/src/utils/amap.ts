@@ -12,6 +12,7 @@
 
 import type { TravelResourceType } from '@/types/resource'
 import { isNavigableResourceType } from '@/types/resource'
+import type { LocationMatchStatus, LocationMatchSource } from '@/types/plan'
 import {
   getScenicDetail,
   getHotelDetail,
@@ -20,6 +21,7 @@ import {
   getMallDetail,
 } from '@/api/travel'
 import type { ApiError } from '@/api/request'
+import { appendQueryParams } from '@/utils/query'
 
 // ==================== 类型 ====================
 
@@ -38,6 +40,12 @@ export interface AmapLocation {
   longitude?: number | string | null
   resourceType?: string | null
   resourceId?: number | null
+  /** 坐标匹配状态（P5）；历史计划为 null */
+  matchStatus?: LocationMatchStatus
+  /** 坐标匹配来源（P5）；历史计划为 null */
+  matchSource?: LocationMatchSource
+  /** 坐标系标识（P5）；历史计划为 null */
+  coordinateSystem?: string | null
 }
 
 /** 高德地图操作选项（单点用） */
@@ -228,7 +236,7 @@ export function mapTransitMethodToAmapMode(method: string): AmapRouteMode {
  * 构造两点路线 navigation URL
  *
  * 高德参数顺序：from=lng,lat,name&to=lng,lat,name&mode=xxx
- * 使用 URLSearchParams 安全编码，避免手动拼接未转义文本。
+ * 使用 appendQueryParams 安全编码，不依赖 URLSearchParams（兼容 App 运行时）。
  */
 export function buildAmapRouteUrl(
   from: ValidLocation,
@@ -237,13 +245,14 @@ export function buildAmapRouteUrl(
   toName: string,
   mode: AmapRouteMode,
 ): string {
-  const params = new URLSearchParams()
-  params.set('from', `${from.longitude},${from.latitude},${fromName.slice(0, 50)}`)
-  params.set('to', `${to.longitude},${to.latitude},${toName.slice(0, 50)}`)
-  params.set('mode', mode)
-  params.set('src', AMAP_SRC)
-  params.set('callnative', '1')
-  return `https://uri.amap.com/navigation?${params.toString()}`
+  const baseUrl = 'https://uri.amap.com/navigation'
+  return appendQueryParams(baseUrl, {
+    from: `${from.longitude},${from.latitude},${fromName.slice(0, 50)}`,
+    to: `${to.longitude},${to.latitude},${toName.slice(0, 50)}`,
+    mode,
+    src: AMAP_SRC,
+    callnative: '1',
+  })
 }
 
 /**
@@ -256,48 +265,155 @@ export function buildAmapRouteWebUrl(
   toName: string,
   mode: AmapRouteMode,
 ): string {
-  const params = new URLSearchParams()
-  params.set('from', `${from.longitude},${from.latitude},${fromName.slice(0, 50)}`)
-  params.set('to', `${to.longitude},${to.latitude},${toName.slice(0, 50)}`)
-  params.set('mode', mode)
-  params.set('src', AMAP_SRC)
-  return `https://uri.amap.com/navigation?${params.toString()}`
+  const baseUrl = 'https://uri.amap.com/navigation'
+  return appendQueryParams(baseUrl, {
+    from: `${from.longitude},${from.latitude},${fromName.slice(0, 50)}`,
+    to: `${to.longitude},${to.latitude},${toName.slice(0, 50)}`,
+    mode,
+    src: AMAP_SRC,
+  })
 }
 
-// ==================== 地点坐标解析 ====================
+// ==================== 地点坐标解析（P5 增强） ====================
+
+/** 坐标解析来源 */
+export type CoordinateSource = 'plan_json' | 'resource_api'
+
+/** 坐标解析失败原因 */
+export type CoordinateFailReason =
+  | 'NOT_FOUND'
+  | 'AMBIGUOUS'
+  | 'INVALID_COORDINATES'
+  | 'UNSUPPORTED_COORDINATE_SYSTEM'
+  | 'RESOURCE_REQUEST_FAILED'
+
+/** 坐标解析成功结果 */
+export interface CoordinateResolveOk {
+  ok: true
+  location: ValidLocation
+  source: CoordinateSource
+}
+
+/** 坐标解析失败结果 */
+export interface CoordinateResolveFail {
+  ok: false
+  reason: CoordinateFailReason
+}
+
+/** 坐标解析结果联合 */
+export type CoordinateResolveResult = CoordinateResolveOk | CoordinateResolveFail
 
 /**
  * 解析单个 AmapLocation 的坐标
  *
- * 三层降级：
- *   1. 自带坐标 (latitude/longitude)
- *   2. resourceType + resourceId → 查询资源详情
+ * 三层降级 + P5 match_status 可信度判断：
+ *   1. 自带坐标 (latitude/longitude) — 需经过 match_status 可信度检查
+ *   2. resourceType + resourceId → 查询资源详情（not_found/ambiguous 时跳过）
  *   3. 无法取得 → null
  *
  * 复用页面级缓存，不重复查询同一资源。
+ *
+ * P5 规则：
+ *   - matched + 合法坐标 → 直接使用 plan_json 坐标，不请求 API
+ *   - matched + 无效坐标 + 有资源 ID → 允许资源详情补查
+ *   - not_found → 跳过资源详情补查
+ *   - ambiguous → 跳过资源详情补查
+ *   - 历史计划（matchStatus 缺失）→ 保留三层降级
  */
 export async function resolveAmapLocation(
   loc: AmapLocation,
 ): Promise<ValidLocation | null> {
-  // 第一优先级：自带坐标
-  const directLoc = normalizeLocation(loc.latitude, loc.longitude)
-  if (directLoc) return directLoc
+  const matchStatus = loc.matchStatus ?? null
+  const normType = normalizeAmapResourceType(loc.resourceType)
 
-  // 第二优先级：查询资源详情
-  if (
-    loc.resourceType &&
-    loc.resourceId &&
-    isNavigableResourceType(loc.resourceType) &&
-    Number.isInteger(loc.resourceId) &&
-    loc.resourceId > 0
-  ) {
-    const detail = await fetchResourceCoordinates(loc.resourceType, loc.resourceId)
-    if (detail) {
-      const detailLoc = normalizeLocation(detail.latitude, detail.longitude)
-      if (detailLoc) return detailLoc
+  if (import.meta.env.DEV) {
+    console.log('[amap] resolveAmapLocation', {
+      name: loc.name,
+      resourceType: loc.resourceType,
+      normType,
+      resourceId: loc.resourceId,
+      hasCoord: loc.latitude != null && loc.longitude != null,
+      matchStatus,
+      coordinateSystem: loc.coordinateSystem,
+    })
+  }
+
+  // ===== P5 快捷路径：matched + 合法坐标 =====
+  // 后端已确认位置，直接信任 plan_json 中的坐标，跳过 API 补查
+  if (matchStatus === 'matched') {
+    const directLoc = normalizeLocation(loc.latitude, loc.longitude)
+    if (directLoc) {
+      // 坐标系检查：仅 GCJ-02 或 null 视为可信
+      const cs = loc.coordinateSystem ?? null
+      if (cs === null || cs === 'GCJ-02') {
+        if (import.meta.env.DEV) {
+          console.log('[amap] using plan_json coordinates (matched + GCJ-02):', directLoc)
+        }
+        return directLoc
+      }
+      // 非 GCJ-02 坐标系：坐标虽有效，但前端不负责转换
+      // 降级到资源详情补查（如果有资源 ID）
+      if (import.meta.env.DEV) {
+        console.warn('[amap] matched but unsupported coordinate system, will attempt resource fetch:', cs)
+      }
+    } else {
+      // matched 但坐标无效 — 数据异常，允许资源详情补查
+      if (import.meta.env.DEV) {
+        console.warn('[amap] matched but coordinates invalid, will attempt resource fetch')
+      }
     }
   }
 
+  // ===== P5 禁止路径：not_found / ambiguous =====
+  // 后端明确未匹配或不确定 → 不浪费请求补查，直接返回 null
+  // 调用方应降级到名称搜索，不用于精确路线
+  if (matchStatus === 'not_found' || matchStatus === 'ambiguous') {
+    if (import.meta.env.DEV) {
+      console.log('[amap] skipping resource fetch: match_status=' + matchStatus)
+    }
+    return null
+  }
+
+  // ===== 历史兼容路径：无 matchStatus =====
+  // 历史计划或未执行坐标匹配 → 保留原有三层逻辑
+
+  // 第一优先级：自带坐标
+  if (matchStatus === null) {
+    const directLoc = normalizeLocation(loc.latitude, loc.longitude)
+    if (directLoc) {
+      if (import.meta.env.DEV) {
+        console.log('[amap] using historical plan coordinates:', directLoc)
+      }
+      return directLoc
+    }
+  }
+
+  // 第二优先级：查询资源详情
+  // not_found / ambiguous 已在上方 return，不会执行到这里
+  if (
+    normType &&
+    loc.resourceId &&
+    Number.isInteger(loc.resourceId) &&
+    loc.resourceId > 0
+  ) {
+    if (import.meta.env.DEV) {
+      console.log('[amap] fetching resource detail:', { type: normType, id: loc.resourceId })
+    }
+    const detail = await fetchResourceCoordinates(normType, loc.resourceId)
+    if (detail) {
+      const detailLoc = normalizeLocation(detail.latitude, detail.longitude)
+      if (detailLoc) {
+        if (import.meta.env.DEV) {
+          console.log('[amap] using resource API coordinates:', detailLoc)
+        }
+        return detailLoc
+      }
+    }
+  }
+
+  if (import.meta.env.DEV) {
+    console.log('[amap] resolveAmapLocation failed for:', loc.name)
+  }
   return null
 }
 
@@ -421,6 +537,38 @@ export function copyLocationInfo(text: string): void {
       uni.showToast({ title: '复制失败，请手动搜索', icon: 'none' })
     },
   })
+}
+
+// ==================== 资源类型规范化 ====================
+
+/**
+ * 将后端可能返回的资源类型变体统一映射为 amap 内部使用的标准名称
+ *
+ * 已知变体：
+ *   scenic / scenic_spot → scenic_spot
+ *   entertainments / entertainment → entertainment
+ *   mall / shopping_mall → shopping_mall
+ *   hotel / restaurant → 不变
+ */
+const RESOURCE_TYPE_ALIASES: Record<string, string> = {
+  scenic: 'scenic_spot',
+  entertainments: 'entertainment',
+  mall: 'shopping_mall',
+}
+
+export function normalizeAmapResourceType(rawType: string | null | undefined): string | null {
+  if (!rawType || typeof rawType !== 'string') return null
+  const trimmed = rawType.trim()
+  if (!trimmed) return null
+
+  // 先检查别名映射
+  const aliased = RESOURCE_TYPE_ALIASES[trimmed]
+  if (aliased) return aliased
+
+  // 已是标准名称
+  if (isNavigableResourceType(trimmed)) return trimmed
+
+  return null
 }
 
 // ==================== 资源详情延迟查询 ====================

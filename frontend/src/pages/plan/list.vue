@@ -152,6 +152,10 @@ function goToGenerate(): void {
   uni.navigateTo({ url: '/pages/plan/generate' })
 }
 
+function goToViewShare(): void {
+  uni.navigateTo({ url: '/pages/plan/share' })
+}
+
 function formatDate(dateStr: string): string {
   if (!dateStr) return ''
   return dateStr.slice(0, 10)
@@ -166,6 +170,12 @@ function formatDate(dateStr: string): string {
     <view class="generate-entry" @tap="goToGenerate">
       <text class="generate-icon">+</text>
       <text>AI 生成新计划</text>
+    </view>
+
+    <!-- 查看分享入口 -->
+    <view class="view-share-entry" @tap="goToViewShare">
+      <text class="view-share-icon">🔗</text>
+      <text>查看分享计划</text>
     </view>
 
     <!-- 初始加载中 -->
@@ -252,6 +262,25 @@ function formatDate(dateStr: string): string {
 .generate-icon {
   font-size: 40rpx;
   line-height: 1;
+}
+
+// View share entry
+.view-share-entry {
+  margin: 0 32rpx 16rpx;
+  padding: 20rpx 24rpx;
+  background: #fff;
+  border: 1rpx solid #4A90D9;
+  border-radius: 16rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12rpx;
+  font-size: 26rpx;
+  color: #4A90D9;
+}
+
+.view-share-icon {
+  font-size: 32rpx;
 }
 
 // Status

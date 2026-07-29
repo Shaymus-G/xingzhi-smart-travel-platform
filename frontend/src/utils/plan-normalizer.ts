@@ -19,6 +19,8 @@ import type {
   NormalizeResult,
   NormalizeWarning,
   PlanSchemaVersion,
+  LocationMatchStatus,
+  LocationMatchSource,
 } from '@/types/plan'
 
 import {
@@ -143,6 +145,99 @@ function normalizeCoordinate(
   }
 
   return value
+}
+
+// ==================== 坐标系规范化（P5） ====================
+
+/**
+ * 已知的坐标系标识及其规范化形式
+ *
+ * 后端目前使用 GCJ-02（高德坐标系）。
+ * 未知坐标系保留原始值以便调试，但不假设其与 GCJ-02 兼容。
+ */
+const KNOWN_COORDINATE_SYSTEMS: Record<string, string> = {
+  'gcj-02': 'GCJ-02',
+  'gcj02': 'GCJ-02',
+  'GCJ-02': 'GCJ-02',
+  'GCJ02': 'GCJ-02',
+}
+
+/**
+ * 规范化坐标系标识
+ *
+ * - 已知坐标系 → 统一为大写规范形式（如 "GCJ-02"）
+ * - null / undefined / 空字符串 → null
+ * - 未知值 → 保留原始字符串（不假设等于 GCJ-02）
+ */
+function normalizeCoordinateSystem(raw: unknown): string | null {
+  if (raw === null || raw === undefined) return null
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (trimmed === '') return null
+    const normalized = KNOWN_COORDINATE_SYSTEMS[trimmed]
+    if (normalized) return normalized
+    // 未知坐标系 — 保留原值，不冒充 GCJ-02
+    return trimmed
+  }
+  return null
+}
+
+// ==================== 地点匹配规范化（P5） ====================
+
+/** 已知的 location_match_status 枚举值 */
+const KNOWN_MATCH_STATUSES: ReadonlySet<string> = new Set([
+  'matched',
+  'not_found',
+  'ambiguous',
+])
+
+/**
+ * 规范化 location_match_status
+ *
+ * - 已知值 → 原样返回
+ * - null / undefined / 空字符串 → null
+ * - 未知值 → null（降级，避免不可预期的字符串导致 UI 错误）
+ */
+function normalizeLocationMatchStatus(raw: unknown): LocationMatchStatus {
+  if (raw === null || raw === undefined) return null
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (trimmed === '') return null
+    if (KNOWN_MATCH_STATUSES.has(trimmed)) {
+      return trimmed as LocationMatchStatus
+    }
+    // 未知值：降级为 null
+    return null
+  }
+  return null
+}
+
+/** 已知的 location_match_source 枚举值 */
+const KNOWN_MATCH_SOURCES: ReadonlySet<string> = new Set([
+  'resource_database',
+  'external_poi',
+  'manual',
+  'none',
+])
+
+/**
+ * 规范化 location_match_source
+ *
+ * - 已知值 → 原样返回
+ * - null / undefined / 空字符串 → null
+ * - 未知值 → null
+ */
+function normalizeLocationMatchSource(raw: unknown): LocationMatchSource {
+  if (raw === null || raw === undefined) return null
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (trimmed === '') return null
+    if (KNOWN_MATCH_SOURCES.has(trimmed)) {
+      return trimmed as LocationMatchSource
+    }
+    return null
+  }
+  return null
 }
 
 // ==================== 字符串规范化 ====================
@@ -331,7 +426,9 @@ function normalizeTimelineItem(
     city: normalizeNullableString(raw.city),
     district: normalizeNullableString(raw.district),
     poi_id: normalizeNullableString(raw.poi_id),
-    coordinate_system: normalizeNullableString(raw.coordinate_system),
+    coordinate_system: normalizeCoordinateSystem(raw.coordinate_system),
+    location_match_status: normalizeLocationMatchStatus(raw.location_match_status),
+    location_match_source: normalizeLocationMatchSource(raw.location_match_source),
   }
 }
 
@@ -357,6 +454,9 @@ function normalizeMeal(
     latitude: normalizeCoordinate(raw.latitude ?? raw.lat, warnings, `${path}.latitude`, -90, 90),
     longitude: normalizeCoordinate(raw.longitude ?? raw.lng ?? raw.lon, warnings, `${path}.longitude`, -180, 180),
     city: normalizeNullableString(raw.city),
+    coordinate_system: normalizeCoordinateSystem(raw.coordinate_system),
+    location_match_status: normalizeLocationMatchStatus(raw.location_match_status),
+    location_match_source: normalizeLocationMatchSource(raw.location_match_source),
   }
 }
 
@@ -383,6 +483,9 @@ function normalizeHotel(
     latitude: normalizeCoordinate(raw.latitude ?? raw.lat, warnings, `${path}.latitude`, -90, 90),
     longitude: normalizeCoordinate(raw.longitude ?? raw.lng ?? raw.lon, warnings, `${path}.longitude`, -180, 180),
     city: normalizeNullableString(raw.city),
+    coordinate_system: normalizeCoordinateSystem(raw.coordinate_system),
+    location_match_status: normalizeLocationMatchStatus(raw.location_match_status),
+    location_match_source: normalizeLocationMatchSource(raw.location_match_source),
   }
 }
 
@@ -453,6 +556,8 @@ function emptyTimelineItem(): PlanTimelineItem {
     district: null,
     poi_id: null,
     coordinate_system: null,
+    location_match_status: null,
+    location_match_source: null,
   }
 }
 
@@ -467,6 +572,9 @@ function emptyMeal(): PlanMeal {
     latitude: null,
     longitude: null,
     city: null,
+    coordinate_system: null,
+    location_match_status: null,
+    location_match_source: null,
   }
 }
 
