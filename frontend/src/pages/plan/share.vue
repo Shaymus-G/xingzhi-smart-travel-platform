@@ -170,6 +170,28 @@ function handleBackToInput(): void {
   errorMessage.value = ''
   pageStatus.value = 'input'
 }
+
+// ========== Token 复制与遮罩 ==========
+
+/** 遮罩 Token 用于页面显示 */
+function maskShareToken(t: string): string {
+  if (!t || t.length <= 12) return '已获取分享凭证'
+  return t.slice(0, 4) + '****' + t.slice(-4)
+}
+
+/** 复制当前 Token 到剪贴板 */
+function copyCurrentShareToken(): void {
+  if (!token.value) return
+  uni.setClipboardData({
+    data: token.value,
+    success: () => {
+      uni.showToast({ title: '分享 Token 已复制', icon: 'success' })
+    },
+    fail: () => {
+      uni.showToast({ title: '复制失败，请重试', icon: 'none' })
+    },
+  })
+}
 </script>
 
 <template>
@@ -244,6 +266,12 @@ function handleBackToInput(): void {
       <!-- 基本信息 -->
       <view class="info-card">
         <text class="info-title">{{ viewModel.title }}</text>
+
+        <!-- 分享凭证（遮罩显示 + 复制按钮） -->
+        <view class="share-credential-row">
+          <text class="share-credential-label">分享凭证：{{ maskShareToken(token) }}</text>
+          <text class="share-credential-copy" @tap="copyCurrentShareToken">复制 Token</text>
+        </view>
 
         <view class="info-grid">
           <view class="info-item">
@@ -543,9 +571,41 @@ function handleBackToInput(): void {
   font-weight: 700;
   color: #333;
   display: block;
-  margin-bottom: 20rpx;
+  margin-bottom: 12rpx;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+// ===== 分享凭证行 =====
+.share-credential-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12rpx 16rpx;
+  background: #f8f8f8;
+  border-radius: 10rpx;
+  margin-bottom: 20rpx;
+  gap: 12rpx;
+}
+
+.share-credential-label {
+  font-size: 24rpx;
+  color: #999;
+  font-family: monospace;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.share-credential-copy {
+  font-size: 24rpx;
+  color: #4A90D9;
+  padding: 6rpx 16rpx;
+  border: 1rpx solid #4A90D9;
+  border-radius: 8rpx;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .info-grid {

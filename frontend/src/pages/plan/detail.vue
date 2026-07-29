@@ -526,6 +526,14 @@ const createShareExpires = ref(72)
 const createShareIncludeBudget = ref(false)
 /** 创建分享结果（成功后显示） */
 const createdShareResult = ref<ShareCreated | null>(null)
+/**
+ * 页面内存中的 Token 映射：share_id → share_token
+ *
+ * 后端列表接口 share_url 中的 token 是哈希值，不可用于公开访问。
+ * 只有创建时返回的原始 share_token 才是有效凭证。
+ * 此映射仅在页面生命周期内有效，不持久化。
+ */
+const createdShareTokens = new Map<number, string>()
 
 /** 分享完整计划 — 弹出选项菜单 */
 function handleShareFullPlan(): void {
@@ -676,6 +684,8 @@ async function handleCreateShare(): Promise<void> {
 
   if (result.data) {
     createdShareResult.value = result.data
+    // 保存到页面内存映射，供管理列表使用
+    createdShareTokens.set(result.data.share_id, result.data.share_token)
   } else {
     uni.showToast({ title: result.error || '创建失败', icon: 'none' })
   }
@@ -700,23 +710,34 @@ function previewSharePage(token: string): void {
   })
 }
 
-/** 从分享记录中提取 token 并预览 */
-function previewShareFromList(share: ShareInfo): void {
-  // share_url 格式: "/api/public/plan-shares/{token}"
-  const parts = share.share_url.split('/')
-  const tokenFromUrl = parts[parts.length - 1]
-  if (tokenFromUrl) {
-    previewSharePage(tokenFromUrl)
-  }
+/** 获取指定 share 的有效 Token（仅在页面内存映射中查找） */
+function getAccessibleToken(shareId: number): string | null {
+  return createdShareTokens.get(shareId) ?? null
 }
 
-/** 获取公开 H5 页面 URL */
-function getPublicSharePageUrl(token: string): string | null {
-  const publicBase = import.meta.env.VITE_PUBLIC_H5_BASE_URL
-  if (!publicBase) return null
-  const base = String(publicBase).trim().replace(/\/+$/, '')
-  const encoded = encodeURIComponent(token)
-  return `${base}/#/pages/plan/share?token=${encoded}`
+/** 从管理列表查看分享 — 仅当有有效 Token */
+function viewShareFromList(shareId: number): void {
+  const accessibleToken = getAccessibleToken(shareId)
+  if (!accessibleToken) {
+    uni.showToast({ title: '当前设备没有该分享的访问凭证', icon: 'none', duration: 2500 })
+    return
+  }
+  previewSharePage(accessibleToken)
+}
+
+/** 从管理列表复制 Token — 仅当有有效 Token */
+function copyShareTokenFromList(shareId: number): void {
+  const accessibleToken = getAccessibleToken(shareId)
+  if (!accessibleToken) {
+    uni.showToast({ title: '当前设备没有该分享的访问凭证', icon: 'none', duration: 2500 })
+    return
+  }
+  uni.setClipboardData({
+    data: accessibleToken,
+    success: () => {
+      uni.showToast({ title: '分享 Token 已复制', icon: 'success' })
+    },
+  })
 }
 
 /** 复制公开 H5 页面链接 */
@@ -732,6 +753,15 @@ function copySharePageUrl(token: string): void {
       uni.showToast({ title: '分享链接已复制', icon: 'success' })
     },
   })
+}
+
+/** 获取公开 H5 页面 URL */
+function getPublicSharePageUrl(token: string): string | null {
+  const publicBase = import.meta.env.VITE_PUBLIC_H5_BASE_URL
+  if (!publicBase) return null
+  const base = String(publicBase).trim().replace(/\/+$/, '')
+  const encoded = encodeURIComponent(token)
+  return `${base}/#/pages/plan/share?token=${encoded}`
 }
 
 /** 是否可复制公开链接 */
@@ -1225,21 +1255,37 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
                 <text class="share-item-value">已公开</text>
               </view>
 
+              <!-- 是否有有效访问凭证 -->
+              <view
+                v-if="share.status === 'active' && !getAccessibleToken(share.share_id)"
+                class="share-no-token-hint"
+              >
+                <text>当前设备没有该分享的访问凭证，请重新创建分享。</text>
+              </view>
+
               <!-- 操作区 -->
               <view class="share-item-actions">
-                <view
-                  class="share-action-btn"
-                  @tap="previewShareFromList(share)"
-                >
-                  <text>查看</text>
-                </view>
-                <view
-                  v-if="share.status === 'active' && hasPublicBaseUrl"
-                  class="share-action-btn"
-                  @tap="copySharePageUrl(share.share_url.split('/').pop() || '')"
-                >
-                  <text>复制链接</text>
-                </view>
+                <template v-if="getAccessibleToken(share.share_id)">
+                  <view
+                    class="share-action-btn"
+                    @tap="viewShareFromList(share.share_id)"
+                  >
+                    <text>查看</text>
+                  </view>
+                  <view
+                    class="share-action-btn"
+                    @tap="copyShareTokenFromList(share.share_id)"
+                  >
+                    <text>复制 Token</text>
+                  </view>
+                  <view
+                    v-if="share.status === 'active' && hasPublicBaseUrl"
+                    class="share-action-btn"
+                    @tap="copySharePageUrl(getAccessibleToken(share.share_id)!)"
+                  >
+                    <text>复制链接</text>
+                  </view>
+                </template>
                 <view
                   v-if="share.status === 'active'"
                   class="share-action-btn danger"
@@ -1994,6 +2040,20 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
   opacity: 0.5;
   border-color: #ccc;
   color: #ccc;
+}
+
+// No-token hint
+.share-no-token-hint {
+  margin-top: 8rpx;
+  padding: 12rpx;
+  background: #fff8e1;
+  border-radius: 8rpx;
+
+  text {
+    font-size: 22rpx;
+    color: #e6a23c;
+    line-height: 1.5;
+  }
 }
 
 // Share item action buttons
