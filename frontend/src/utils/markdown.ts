@@ -198,6 +198,192 @@ function renderListBlock(listLines: string[]): string {
   return parts.join('')
 }
 
+// ==================== 表格类型与解析 ====================
+
+type MarkdownTableAlignment = 'left' | 'center' | 'right'
+
+interface MarkdownTableBlock {
+  headers: string[]
+  alignments: MarkdownTableAlignment[]
+  rows: string[][]
+}
+
+/** 表格分隔行判定：每单元格至少 3 个 -，可前缀 : 或后缀 : 表示对齐 */
+function isMarkdownTableSeparator(line: string): boolean {
+  // 去除首尾可选管道和空白
+  let content = line.trim()
+  if (content.startsWith('|')) content = content.slice(1)
+  if (content.endsWith('|')) content = content.slice(0, -1)
+
+  const cells = content.split('|').map((c) => c.trim())
+  if (cells.length === 0) return false
+
+  return cells.every((cell) => /^:?-{3,}:?$/.test(cell))
+}
+
+/** 从分隔行提取对齐方式 */
+function parseAlignments(line: string, colCount: number): MarkdownTableAlignment[] {
+  let content = line.trim()
+  if (content.startsWith('|')) content = content.slice(1)
+  if (content.endsWith('|')) content = content.slice(0, -1)
+
+  const cells = content.split('|').map((c) => c.trim())
+  const alignments: MarkdownTableAlignment[] = []
+
+  for (let i = 0; i < colCount; i++) {
+    const cell = cells[i] || ''
+    const left = cell.startsWith(':')
+    const right = cell.endsWith(':')
+    if (left && right) alignments.push('center')
+    else if (right) alignments.push('right')
+    else alignments.push('left')
+  }
+
+  return alignments
+}
+
+/**
+ * 安全拆分表格行单元格
+ *
+ * 识别行内代码 `` ` `` 中的 `|`，不将其视为列分隔符。
+ * 支持反斜杠转义 `\|`。
+ * 去除可选的首尾 `|`。
+ */
+function splitMarkdownTableRow(line: string): string[] {
+  let content = line.trim()
+
+  // 去除可选的首尾管道符
+  if (content.startsWith('|')) content = content.slice(1)
+  if (content.endsWith('|')) content = content.slice(0, -1)
+
+  const cells: string[] = []
+  let current = ''
+  let inCode = false
+
+  for (let i = 0; i < content.length; i++) {
+    const ch = content[i]
+
+    if (ch === '`') {
+      inCode = !inCode
+      current += ch
+    } else if (ch === '\\' && i + 1 < content.length && content[i + 1] === '|') {
+      // 转义管道符：\| → |
+      current += '|'
+      i++ // skip the |
+    } else if (ch === '|' && !inCode) {
+      // 真正的列分隔符
+      cells.push(current.trim())
+      current = ''
+    } else {
+      current += ch
+    }
+  }
+
+  cells.push(current.trim())
+  return cells
+}
+
+/** 规范化表格行列数（以表头为准） */
+function normalizeRowColumns(headers: string[], rowCells: string[]): string[] {
+  const result = [...rowCells]
+
+  // 少于表头 → 尾部补空
+  while (result.length < headers.length) {
+    result.push('')
+  }
+
+  // 多于表头 → 合并多余列到最后
+  if (result.length > headers.length) {
+    const extra = result.splice(headers.length - 1)
+    result[headers.length - 1] = [result[headers.length - 1], ...extra]
+      .filter((c) => c !== '')
+      .join(' ')
+  }
+
+  return result
+}
+
+/** 尝试从 lines[startIndex] 开始解析表格，成功返回 { block, nextIndex } */
+function parseMarkdownTable(
+  lines: string[],
+  startIndex: number,
+): { block: MarkdownTableBlock; nextIndex: number } | null {
+  if (startIndex + 1 >= lines.length) return null
+
+  const headerLine = lines[startIndex]
+  const separatorLine = lines[startIndex + 1].trim()
+
+  // 表头行必须包含管道符，分隔行必须符合格式
+  if (!headerLine.includes('|') || !isMarkdownTableSeparator(separatorLine)) {
+    return null
+  }
+
+  const headers = splitMarkdownTableRow(headerLine)
+  if (headers.length === 0) return null
+
+  const alignments = parseAlignments(separatorLine, headers.length)
+  // 补齐缺失的对齐信息
+  while (alignments.length < headers.length) {
+    alignments.push('left')
+  }
+
+  // 收集数据行
+  const rows: string[][] = []
+  let i = startIndex + 2
+
+  while (i < lines.length) {
+    const candidate = lines[i]
+    if (!candidate.trim()) break // 空行结束表格
+    if (candidate.trim().startsWith('%%CODEBLOCK_')) break
+    if (!candidate.includes('|')) break // 不含管道符 → 不是表格行
+
+    const rowCells = splitMarkdownTableRow(candidate)
+    rows.push(normalizeRowColumns(headers, rowCells))
+    i++
+  }
+
+  return { block: { headers, alignments, rows }, nextIndex: i }
+}
+
+/** 将表格块渲染为 HTML 字符串（H5 用） */
+function renderMarkdownTable(block: MarkdownTableBlock): string {
+  const parts: string[] = []
+
+  parts.push('<div class="md-table-scroll"><table class="md-table">')
+
+  // thead
+  parts.push('<thead><tr>')
+  for (let ci = 0; ci < block.headers.length; ci++) {
+    const align = block.alignments[ci] || 'left'
+    const cellContent = applyInlineFormatting(block.headers[ci])
+    parts.push(`<th class="md-align-${align}">${cellContent}</th>`)
+  }
+  parts.push('</tr></thead>')
+
+  // tbody
+  parts.push('<tbody>')
+  for (const row of block.rows) {
+    parts.push('<tr>')
+    for (let ci = 0; ci < block.headers.length; ci++) {
+      const align = block.alignments[ci] || 'left'
+      const cellContent = applyInlineFormatting(row[ci] || '')
+      parts.push(`<td class="md-align-${align}">${cellContent}</td>`)
+    }
+    parts.push('</tr>')
+  }
+  parts.push('</tbody>')
+
+  parts.push('</table></div>')
+  return parts.join('')
+}
+
+// ==================== 块级输出类型 ====================
+
+/** 渲染块：HTML 片段或结构化表格 */
+export type MarkdownRenderBlock =
+  | { type: 'html'; html: string }
+  | { type: 'table'; headers: string[]; alignments: MarkdownTableAlignment[]; rows: string[][] }
+
 // ==================== 公开 API ====================
 
 /**
@@ -254,6 +440,16 @@ export function markdownToHtml(markdown: string): string {
       outputParts.push(trimmed)
       i++
       continue
+    }
+
+    // 表格 — 必须在水平线之前检查（分隔行含 --- 但前后有管道符）
+    if (trimmed.includes('|') && i + 1 < lines.length) {
+      const tableResult = parseMarkdownTable(lines, i)
+      if (tableResult) {
+        outputParts.push(renderMarkdownTable(tableResult.block))
+        i = tableResult.nextIndex
+        continue
+      }
     }
 
     // 水平线
@@ -328,7 +524,8 @@ export function markdownToHtml(markdown: string): string {
         /^(#{1,3}) /.test(pl.trim()) ||
         pl.trim().startsWith('&gt; ') ||
         matchListItem(pl) ||
-        /^(---|\*\*\*|___)$/.test(pl.trim())
+        /^(---|\*\*\*|___)$/.test(pl.trim()) ||
+        (pl.includes('|') && isMarkdownTableSeparator(lines[i + 1]?.trim() || ''))
       ) {
         break
       }
@@ -360,4 +557,96 @@ export function markdownToHtml(markdown: string): string {
  */
 export function markdownToRichTextNodes(markdown: string): string {
   return markdownToHtml(markdown)
+}
+
+/**
+ * 将 Markdown 文本解析为块级渲染结果数组
+ *
+ * 表格块从 HTML 中分离，由调用方使用原生组件渲染，
+ * 解决 rich-text 在 App 端对 <table> 支持不完整的问题。
+ *
+ * @returns MarkdownRenderBlock[] — HTML 块和表格块交替
+ */
+export function markdownToBlocks(markdown: string): MarkdownRenderBlock[] {
+  if (!markdown) return []
+
+  // 先用完整 HTML 解析器生成 HTML
+  const html = markdownToHtml(markdown)
+
+  // 从 HTML 中提取表格占位块
+  const blocks: MarkdownRenderBlock[] = []
+
+  // 分离 <div class="md-table-scroll">...</div> 为独立表格块
+  const TABLE_REGEX = /<div class="md-table-scroll"><table class="md-table">([\s\S]*?)<\/table><\/div>/g
+
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+
+  while ((match = TABLE_REGEX.exec(html)) !== null) {
+    // 表格之前的 HTML
+    const before = html.slice(lastIndex, match.index).trim()
+    if (before) {
+      blocks.push({ type: 'html', html: before })
+    }
+
+    // 表格块 — 从 HTML 中提取数据
+    const tableHtml = match[1]
+    const tableBlock = extractTableFromHtml(tableHtml)
+    if (tableBlock) {
+      blocks.push({ type: 'table', ...tableBlock })
+    } else {
+      // 降级：作为 HTML 输出
+      blocks.push({ type: 'html', html: match[0] })
+    }
+
+    lastIndex = match.index + match[0].length
+  }
+
+  // 尾部 HTML
+  const after = html.slice(lastIndex).trim()
+  if (after) {
+    blocks.push({ type: 'html', html: after })
+  }
+
+  return blocks
+}
+
+/** 从渲染后的 HTML 片段反向提取表格数据（用于块级渲染） */
+function extractTableFromHtml(
+  tableInner: string,
+): { headers: string[]; alignments: MarkdownTableAlignment[]; rows: string[][] } | null {
+  // 解析 thead → headers + alignments
+  const theadMatch = tableInner.match(/<thead>([\s\S]*?)<\/thead>/)
+  const headers: string[] = []
+  const alignments: MarkdownTableAlignment[] = []
+
+  if (theadMatch) {
+    const thRegex = /<th class="md-align-(left|center|right)">([\s\S]*?)<\/th>/g
+    let thMatch: RegExpExecArray | null
+    while ((thMatch = thRegex.exec(theadMatch[1])) !== null) {
+      alignments.push(thMatch[1] as MarkdownTableAlignment)
+      headers.push(thMatch[2])
+    }
+  }
+
+  // 解析 tbody → rows
+  const tbodyMatch = tableInner.match(/<tbody>([\s\S]*?)<\/tbody>/)
+  const rows: string[][] = []
+
+  if (tbodyMatch) {
+    const trRegex = /<tr>([\s\S]*?)<\/tr>/g
+    let trMatch: RegExpExecArray | null
+    while ((trMatch = trRegex.exec(tbodyMatch[1])) !== null) {
+      const tdRegex = /<td class="md-align-(?:left|center|right)">([\s\S]*?)<\/td>/g
+      const row: string[] = []
+      let tdMatch: RegExpExecArray | null
+      while ((tdMatch = tdRegex.exec(trMatch[1])) !== null) {
+        row.push(tdMatch[1])
+      }
+      rows.push(row)
+    }
+  }
+
+  if (headers.length === 0) return null
+  return { headers, alignments, rows }
 }

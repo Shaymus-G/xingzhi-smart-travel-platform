@@ -176,4 +176,52 @@ page {
   max-width: 100%;
   height: auto;
 }
+
+// ==================== AI Markdown 表格样式 ====================
+
+/* H5 端 rich-text 内 HTML 表格 */
+.chat-bubble.assistant .md-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  box-sizing: border-box;
+  margin: 16rpx 0;
+}
+
+.chat-bubble.assistant .md-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  table-layout: auto;
+  font-size: 24rpx;
+}
+
+.chat-bubble.assistant .md-table th,
+.chat-bubble.assistant .md-table td {
+  min-width: 140rpx;
+  max-width: 420rpx;
+  padding: 14rpx 16rpx;
+  border: 1px solid #e5e7eb;
+  box-sizing: border-box;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.chat-bubble.assistant .md-table th {
+  font-weight: 600;
+  background: #f6f7f9;
+}
+
+.chat-bubble.assistant .md-align-left {
+  text-align: left;
+}
+
+.chat-bubble.assistant .md-align-center {
+  text-align: center;
+}
+
+.chat-bubble.assistant .md-align-right {
+  text-align: right;
+}
 </style>
