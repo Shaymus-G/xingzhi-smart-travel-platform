@@ -35,3 +35,5 @@ services:
         value: https://api.deepseek.com
       - key: DEEPSEEK_MODEL
         value: deepseek-v4-flash
+      - key: DEEPSEEK_TIMEOUT_SECONDS
+        value: "120"
