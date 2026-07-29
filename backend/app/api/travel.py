@@ -14,7 +14,7 @@ from app.schemas.restaurant import RestaurantCreate, RestaurantUpdate, Restauran
 from app.schemas.entertainment import EntertainmentCreate, EntertainmentUpdate, EntertainmentResponse
 from app.schemas.shopping_mall import ShoppingMallCreate, ShoppingMallUpdate, ShoppingMallResponse
 from app.schemas.travel import TravelPlanCreate, TravelPlanUpdate, TravelPlanResponse
-from app.services import travel_service
+from app.services import travel_service, share_service
 from app.utils.response import success
 
 router = APIRouter(prefix="/travel", tags=["旅游资源"])
@@ -351,3 +351,58 @@ def delete_plan(plan_id: int, current_user: User = Depends(get_current_user),
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="计划不存在")
     travel_service.delete_plan(db, plan)
     return success(message="计划已删除")
+
+
+# ==================== Plan Share ====================
+
+share_router = APIRouter(prefix="/public", tags=["公开分享"])
+
+
+@router.post("/plans/{plan_id}/shares", response_model=dict)
+def create_plan_share(
+    plan_id: int,
+    expires_in_hours: int = Query(72, ge=1, le=720, description="有效期（小时）"),
+    include_budget: bool = Query(False, description="是否公开预算"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """创建旅行计划的公开分享链接"""
+    result = share_service.create_share(
+        db, plan_id, current_user.id, expires_in_hours, include_budget
+    )
+    if "error" in result:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=result["error"])
+    return success(data=result, message="分享创建成功")
+
+
+@router.get("/plans/{plan_id}/shares", response_model=dict)
+def list_plan_shares(
+    plan_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """查看计划的分享记录"""
+    shares = share_service.get_shares_by_plan(db, plan_id, current_user.id)
+    return success(data=shares)
+
+
+@router.delete("/plans/{plan_id}/shares/{share_id}", response_model=dict)
+def revoke_plan_share(
+    plan_id: int, share_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """撤销分享"""
+    ok = share_service.revoke_share(db, plan_id, share_id, current_user.id)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="分享不存在")
+    return success(message="分享已撤销")
+
+
+@share_router.get("/plan-shares/{token}", response_model=dict)
+def get_public_share(token: str, db: Session = Depends(get_db)):
+    """公开访问分享快照（无需登录）"""
+    snapshot = share_service.get_public_share(db, token)
+    if snapshot is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="分享不存在或已过期")
+    return success(data=snapshot)

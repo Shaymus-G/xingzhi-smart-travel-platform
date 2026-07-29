@@ -27,3 +27,7 @@ router.include_router(recommend.router, prefix="/api")
 
 # 交通路径规划（高德地图）
 router.include_router(transit.router, prefix="/api")
+
+# 公开分享（无需登录）
+from app.api.travel import share_router
+router.include_router(share_router, prefix="/api")
