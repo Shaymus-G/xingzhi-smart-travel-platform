@@ -10,7 +10,7 @@ from app.services.travel_service import get_scenic_by_id
 AMAP_BASE = "https://restapi.amap.com/v3/direction"
 
 
-def get_route(
+async def get_route(
     db: Session,
     from_type: str, from_id: int,
     to_type: str, to_id: int,
@@ -45,18 +45,18 @@ def get_route(
     if method == "transit":
         if not city:
             return {"error": "公交模式需要提供 city 参数"}
-        return _call_transit(origin_str, dest_str, city)
+        return await _call_transit(origin_str, dest_str, city)
     elif method == "driving":
-        return _call_driving(origin_str, dest_str)
+        return await _call_driving(origin_str, dest_str)
     elif method == "walking":
-        return _call_walking(origin_str, dest_str)
+        return await _call_walking(origin_str, dest_str)
     elif method == "bicycling":
-        return _call_bicycling(origin_str, dest_str)
+        return await _call_bicycling(origin_str, dest_str)
     else:
         return {"error": f"不支持的出行方式: {method}"}
 
 
-def get_route_between_spots(
+async def get_route_between_spots(
     db: Session,
     spot_a_id: int,
     spot_b_id: int,
@@ -72,7 +72,7 @@ def get_route_between_spots(
     city = db.get(City, spot_a.city_id)
     city_name = city.name if city else None
 
-    return get_route(
+    return await get_route(
         db, "scenic_spot", spot_a_id,
         "scenic_spot", spot_b_id,
         method, city_name,

@@ -14,9 +14,13 @@ import ReviewItem from '@/components/ReviewItem.vue'
 interface Props {
   targetType: SocialTargetType
   targetId: number
+  /** 水平内边距，默认 32rpx，通用资源详情页传 24rpx */
+  horizontalPadding?: string
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  horizontalPadding: '32rpx',
+})
 
 // ==================== 认证 ====================
 
@@ -174,7 +178,7 @@ function resetAndLoad(): void {
 </script>
 
 <template>
-  <view v-if="isValid()" class="rss-container">
+  <view v-if="isValid()" class="rss-container" :style="{ paddingLeft: horizontalPadding, paddingRight: horizontalPadding }">
     <!-- 收藏区 -->
     <view class="rss-favorite-bar">
       <view
@@ -249,6 +253,8 @@ function resetAndLoad(): void {
 .rss-container {
   background: #fff;
   margin: 20rpx 0;
+  box-sizing: border-box;
+  width: 100%;
 }
 
 // Favorite

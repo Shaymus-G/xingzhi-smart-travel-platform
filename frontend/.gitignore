@@ -6,3 +6,9 @@ dist/
 *.local
 .env.local
 .env.*.local
+
+# Android / App 构建产物
+*.apk
+*.aab
+*.keystore
+*.jks

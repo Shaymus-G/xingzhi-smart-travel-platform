@@ -17,9 +17,29 @@ interface Props {
   destinationId: number
   destinationName: string
   city?: string
+  /** 高德路线按钮是否正在加载（父组件管理） */
+  amapLoading?: boolean
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  amapLoading: false,
+})
+
+// ==================== Emits ====================
+
+const emit = defineEmits<{
+  (e: 'open-amap-route', payload: { method: TransitMethod }): void
+}>()
+
+function handleOpenAmapRoute(): void {
+  if (props.amapLoading) return
+
+  if (import.meta.env.DEV) {
+    console.log('[amap-route] button tapped', { method: selectedMethod.value })
+  }
+
+  emit('open-amap-route', { method: selectedMethod.value })
+}
 
 // ==================== 方式配置 ====================
 
@@ -220,6 +240,16 @@ function segmentLabel(seg: TransitSegment): string {
         <text v-else class="trp-no-steps">暂无详细步骤</text>
       </view>
     </view>
+
+    <!-- 高德地图两点路线入口 -->
+    <view
+      class="trp-amap-route"
+      :class="{ loading: amapLoading }"
+      @tap.stop="handleOpenAmapRoute"
+    >
+      <text class="trp-amap-icon">🗺️</text>
+      <text class="trp-amap-text">{{ amapLoading ? '正在准备高德路线……' : '在高德地图中查看路线' }}</text>
+    </view>
   </view>
 </template>
 
@@ -230,6 +260,10 @@ function segmentLabel(seg: TransitSegment): string {
   padding: 20rpx 24rpx;
   margin-top: 16rpx;
   border: 1rpx solid #eee;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .trp-header {
@@ -246,6 +280,8 @@ function segmentLabel(seg: TransitSegment): string {
 .trp-endpoints {
   font-size: 24rpx;
   color: #999;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .trp-methods {
@@ -331,6 +367,7 @@ function segmentLabel(seg: TransitSegment): string {
 
 .trp-step-body {
   flex: 1;
+  min-width: 0;
 }
 
 .trp-step-name {
@@ -361,5 +398,34 @@ function segmentLabel(seg: TransitSegment): string {
   font-size: 24rpx;
   color: #999;
   padding: 8rpx 0;
+}
+
+// 高德路线入口
+.trp-amap-route {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12rpx;
+  margin-top: 20rpx;
+  padding: 20rpx 24rpx;
+  background: #4A90D9;
+  border-radius: 12rpx;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+}
+
+.trp-amap-route.loading {
+  background: #8ab4e0;
+}
+
+.trp-amap-icon {
+  font-size: 32rpx;
+}
+
+.trp-amap-text {
+  font-size: 28rpx;
+  color: #fff;
+  font-weight: 600;
 }
 </style>

@@ -15,6 +15,10 @@ import {
   getEntertainments, getMalls,
 } from '@/api/travel'
 import type { City, ScenicSpot, Hotel, Restaurant, Entertainment, ShoppingMall } from '@/types/travel'
+import RecommendationSection from '@/components/RecommendationSection.vue'
+import { getNearbyCities, getSimilarCities, getContrastCities } from '@/api/recommend'
+import { normalizeRecommendCity } from '@/utils/recommend'
+import type { NormalizedRecommendCity, RecommendCity, RecommendationVariant } from '@/types/recommend'
 
 // ==================== 类型 ====================
 
@@ -35,6 +39,21 @@ const TABS: Array<{ key: CityResourceTab; label: string }> = [
   { key: 'shopping_mall', label: '商场' },
 ]
 
+// ==================== 推荐类型与常量 ====================
+
+/** 城市详情页使用的推荐类型（排除 collaborative） */
+type DetailRecommendationVariant = Exclude<RecommendationVariant, 'collaborative'>
+
+/** 推荐区域状态 */
+interface RecommendationState {
+  cities: NormalizedRecommendCity[]
+  loading: boolean
+  error: string | null
+}
+
+const RECOMMENDATION_LIMIT = 8
+const NEARBY_RADIUS_KM = 200
+
 // ==================== 路由参数 ====================
 
 const cityId = ref(0)
@@ -51,6 +70,14 @@ const restaurantState = reactive<TabState<Restaurant>>({ items: [], loading: fal
 const entertainmentState = reactive<TabState<Entertainment>>({ items: [], loading: false, loaded: false, error: null })
 const mallState = reactive<TabState<ShoppingMall>>({ items: [], loading: false, loaded: false, error: null })
 
+// ==================== 推荐区域状态 ====================
+
+const nearbyState = reactive<RecommendationState>({ cities: [], loading: false, error: null })
+const similarState = reactive<RecommendationState>({ cities: [], loading: false, error: null })
+const contrastState = reactive<RecommendationState>({ cities: [], loading: false, error: null })
+
+// ==================== 状态选择函数 ====================
+
 function getState(tab: CityResourceTab): TabState<any> {
   switch (tab) {
     case 'scenic_spot': return scenicState
@@ -59,6 +86,151 @@ function getState(tab: CityResourceTab): TabState<any> {
     case 'entertainment': return entertainmentState
     case 'shopping_mall': return mallState
   }
+}
+
+/** 根据 variant 获取对应的推荐状态 */
+function getRecommendationState(
+  variant: DetailRecommendationVariant,
+): RecommendationState {
+  switch (variant) {
+    case 'nearby': return nearbyState
+    case 'similar': return similarState
+    case 'contrast': return contrastState
+  }
+}
+
+// ==================== 推荐数据处理 ====================
+
+/**
+ * 标准化推荐列表：标准化、过滤无效 ID、过滤当前城市、按 ID 去重、保序
+ */
+function normalizeRecommendationList(
+  rawCities: RecommendCity[],
+  currentCityId: number,
+): NormalizedRecommendCity[] {
+  const safeRawCities = Array.isArray(rawCities) ? rawCities : []
+  const seen = new Set<number>()
+  const result: NormalizedRecommendCity[] = []
+
+  for (const rawCity of safeRawCities) {
+    const city = normalizeRecommendCity(rawCity)
+
+    if (
+      !Number.isFinite(city.id) ||
+      !Number.isInteger(city.id) ||
+      city.id <= 0 ||
+      city.id === currentCityId ||
+      seen.has(city.id)
+    ) {
+      continue
+    }
+
+    seen.add(city.id)
+    result.push(city)
+  }
+
+  return result
+}
+
+/**
+ * 根据 variant 调用对应的推荐接口
+ */
+async function fetchRecommendationCities(
+  variant: DetailRecommendationVariant,
+  currentCityId: number,
+): Promise<RecommendCity[]> {
+  switch (variant) {
+    case 'nearby':
+      return getNearbyCities(currentCityId, NEARBY_RADIUS_KM, RECOMMENDATION_LIMIT)
+    case 'similar':
+      return getSimilarCities(currentCityId, RECOMMENDATION_LIMIT)
+    case 'contrast':
+      return getContrastCities(currentCityId, RECOMMENDATION_LIMIT)
+  }
+}
+
+// ==================== 推荐加载 ====================
+
+/** 加载单个推荐区域的数据 */
+async function loadRecommendationVariant(
+  variant: DetailRecommendationVariant,
+): Promise<void> {
+  const state = getRecommendationState(variant)
+
+  // 防止重复请求
+  if (state.loading) return
+
+  const currentCityId = cityId.value
+
+  if (
+    !Number.isFinite(currentCityId) ||
+    !Number.isInteger(currentCityId) ||
+    currentCityId <= 0
+  ) {
+    state.cities = []
+    state.error = null
+    return
+  }
+
+  state.loading = true
+  state.error = null
+  state.cities = []
+
+  try {
+    const rawCities = await fetchRecommendationCities(variant, currentCityId)
+    state.cities = normalizeRecommendationList(rawCities, currentCityId)
+  } catch (error: unknown) {
+    state.cities = []
+    const message = error instanceof Error ? error.message.trim() : ''
+    state.error = message || '推荐内容加载失败'
+  } finally {
+    state.loading = false
+  }
+}
+
+/** 并发加载全部三个推荐区域 */
+async function loadAllRecommendations(): Promise<void> {
+  await Promise.allSettled([
+    loadRecommendationVariant('nearby'),
+    loadRecommendationVariant('similar'),
+    loadRecommendationVariant('contrast'),
+  ])
+}
+
+// ==================== 推荐重试 ====================
+
+function retryNearby(): void { void loadRecommendationVariant('nearby') }
+function retrySimilar(): void { void loadRecommendationVariant('similar') }
+function retryContrast(): void { void loadRecommendationVariant('contrast') }
+
+// ==================== 推荐导航 ====================
+
+let recommendationNavigating = false
+
+function goRecommendationCity(targetCityId: number): void {
+  if (
+    !Number.isFinite(targetCityId) ||
+    !Number.isInteger(targetCityId) ||
+    targetCityId <= 0 ||
+    targetCityId === cityId.value
+  ) {
+    return
+  }
+
+  if (recommendationNavigating) return
+  recommendationNavigating = true
+
+  uni.navigateTo({
+    url: `/pages/city/detail?id=${targetCityId}`,
+    fail() {
+      uni.showToast({ title: '页面跳转失败', icon: 'none' })
+    },
+    complete() {
+      setTimeout(() => {
+        recommendationNavigating = false
+      }, 800)
+    },
+  })
 }
 
 // ==================== 城市信息加载 ====================
@@ -163,6 +335,8 @@ onLoad((options: any) => {
   cityId.value = id
   // 并行加载城市信息 + 默认 Tab (景点)
   void Promise.all([loadCityInfo(), ensureTabLoaded('scenic_spot')])
+  // 推荐区域独立加载，不阻塞城市主体
+  void loadAllRecommendations()
 })
 </script>
 
@@ -258,6 +432,38 @@ onLoad((options: any) => {
             </template>
           </view>
         </view>
+
+        <!-- ==================== 推荐区域 ==================== -->
+
+        <RecommendationSection
+          title="从这里出发"
+          :cities="nearbyState.cities"
+          variant="nearby"
+          :loading="nearbyState.loading"
+          :error="nearbyState.error"
+          @click="goRecommendationCity"
+          @retry="retryNearby"
+        />
+
+        <RecommendationSection
+          title="喜欢这里的人也喜欢"
+          :cities="similarState.cities"
+          variant="similar"
+          :loading="similarState.loading"
+          :error="similarState.error"
+          @click="goRecommendationCity"
+          @retry="retrySimilar"
+        />
+
+        <RecommendationSection
+          title="换个口味"
+          :cities="contrastState.cities"
+          variant="contrast"
+          :loading="contrastState.loading"
+          :error="contrastState.error"
+          @click="goRecommendationCity"
+          @retry="retryContrast"
+        />
       </template>
 
       <!-- 城市加载失败 -->

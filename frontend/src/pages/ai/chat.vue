@@ -12,7 +12,7 @@
 import { ref, nextTick } from 'vue'
 import { onShow, onHide, onUnload } from '@dcloudio/uni-app'
 import NavBar from '@/components/NavBar.vue'
-import { sendChatMessage, getAISessions } from '@/api/ai'
+import { sendChatMessage, getAISessions, deleteAISession } from '@/api/ai'
 import { useUserStore } from '@/stores/user'
 import type { ChatMessage } from '@/types/ai'
 
@@ -27,6 +27,13 @@ const isSending = ref(false)
 const historyLoading = ref(false)
 const historyLoaded = ref(false)
 const historyError = ref('')
+
+// ========== 删除状态 ==========
+const deletingIds = ref<Set<number | string>>(new Set())
+
+function isDeleting(id: number | string): boolean {
+  return deletingIds.value.has(id)
+}
 
 // ========== 滚动 ==========
 const scrollIntoViewId = ref('')
@@ -140,6 +147,90 @@ function goToGeneratePlan() {
   uni.navigateTo({
     url: '/pages/plan/generate',
   })
+}
+
+// ========== 删除会话 ==========
+async function confirmDeleteSession(msg: ChatMessage, event?: any) {
+  // 阻止事件冒泡，避免同时触发消息点击
+  event?.stopPropagation?.()
+
+  const sessionId = msg.id
+  if (isLocalId(sessionId) || sessionId === 0 || typeof sessionId !== 'number') return
+
+  // 构建确认提示文案
+  const preview = msg.content.length > 30
+    ? msg.content.slice(0, 30) + '...'
+    : msg.content
+
+  try {
+    const res = await uni.showModal({
+      title: '删除对话',
+      content: `确定删除该 AI 对话吗？\n\n"${preview}"\n\n删除后无法恢复。`,
+      confirmText: '删除',
+      cancelText: '取消',
+      confirmColor: '#FF4D4F',
+    })
+
+    if (!res.confirm) return
+
+    await doDeleteSession(sessionId)
+  } catch {
+    // 用户取消或其他情况，不执行删除
+  }
+}
+
+async function doDeleteSession(sessionId: number) {
+  if (isDeleting(sessionId)) return
+
+  deletingIds.value = new Set([...deletingIds.value, sessionId])
+
+  try {
+    await deleteAISession(sessionId)
+
+    if (!pageActive) return
+
+    // 从本地消息列表移除
+    messages.value = messages.value.filter(m => m.id !== sessionId)
+
+    // 如果删除后没有历史消息了，显示欢迎消息
+    const hasServerMessages = messages.value.some(m => !isLocalId(m.id) && m.id !== 0)
+    if (!hasServerMessages) {
+      messages.value = [{
+        id: 0,
+        role: 'assistant',
+        content: '你好！我是行知 AI 旅行助手，有什么可以帮助你的吗？',
+      }]
+    }
+
+    uni.showToast({ title: '已删除', icon: 'success', duration: 1500 })
+  } catch (err) {
+    if (!pageActive) return
+
+    const statusCode = (err as any)?.statusCode || (err as any)?.code
+    let msg = '删除失败，请稍后重试'
+
+    if (statusCode === 401) {
+      msg = '登录已失效，请重新登录'
+    } else if (statusCode === 403) {
+      msg = '没有权限删除该对话'
+    } else if (statusCode === 404) {
+      // 服务端已不存在，从本地列表移除
+      messages.value = messages.value.filter(m => m.id !== sessionId)
+      msg = '该记录已不存在'
+    } else if (statusCode === 500 || statusCode === 503) {
+      msg = '服务暂时不可用，请稍后重试'
+    } else if (err instanceof Error && err.message) {
+      msg = err.message
+    }
+
+    uni.showToast({ title: msg, icon: 'none', duration: 2500 })
+  } finally {
+    if (pageActive) {
+      const next = new Set(deletingIds.value)
+      next.delete(sessionId)
+      deletingIds.value = next
+    }
+  }
 }
 
 // ========== 发送消息（内部，不含登录检查） ==========
@@ -282,6 +373,14 @@ onUnload(() => {
   <view class="chat-page">
     <NavBar title="AI 助手" />
 
+    <!-- 顶部操作区 -->
+    <view class="chat-top-actions">
+      <button class="chat-plan-btn" @tap="goToGeneratePlan">
+        <text class="chat-plan-icon">✈</text>
+        <text>生成 AI 旅行计划</text>
+      </button>
+    </view>
+
     <!-- 消息列表 -->
     <scroll-view
       class="chat-list"
@@ -308,8 +407,21 @@ onUnload(() => {
         class="chat-message"
         :class="{ 'chat-message-self': msg.role === 'user' }"
       >
-        <view class="chat-bubble" :class="msg.role">
-          <text>{{ msg.content }}</text>
+        <view class="chat-bubble-row" :class="{ 'chat-bubble-row-self': msg.role === 'user' }">
+          <view class="chat-bubble" :class="msg.role">
+            <text>{{ msg.content }}</text>
+          </view>
+
+          <!-- 删除按钮（仅服务端消息） -->
+          <view
+            v-if="!isLocalId(msg.id) && msg.id !== 0"
+            class="chat-delete-btn"
+            :class="{ 'chat-delete-disabled': isDeleting(msg.id) }"
+            @tap.stop="confirmDeleteSession(msg, $event)"
+          >
+            <text v-if="!isDeleting(msg.id)">🗑</text>
+            <text v-else class="chat-deleting-spinner">⏳</text>
+          </view>
         </view>
 
         <!-- 发送中指示 -->
@@ -410,6 +522,84 @@ onUnload(() => {
   background: #fff;
   color: #333;
   border-bottom-left-radius: 4rpx;
+}
+
+// ========== 顶部操作区 ==========
+.chat-top-actions {
+  padding: 16rpx 32rpx;
+  background: #fff;
+  border-bottom: 1rpx solid #eee;
+}
+
+.chat-plan-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12rpx;
+  width: 100%;
+  height: 80rpx;
+  background: linear-gradient(135deg, #4A90D9, #357ABD);
+  color: #fff;
+  font-size: 30rpx;
+  font-weight: 500;
+  border-radius: 40rpx;
+  border: none;
+}
+
+.chat-plan-btn::after {
+  border: none;
+}
+
+.chat-plan-icon {
+  font-size: 32rpx;
+}
+
+// ========== 消息行（气泡 + 删除按钮） ==========
+.chat-bubble-row {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+  max-width: 88%;
+}
+
+.chat-bubble-row-self {
+  flex-direction: row-reverse;
+  align-self: flex-end;
+}
+
+// ========== 删除按钮 ==========
+.chat-delete-btn {
+  flex-shrink: 0;
+  width: 48rpx;
+  height: 48rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: transparent;
+  font-size: 28rpx;
+  opacity: 0.4;
+  transition: opacity 0.2s;
+}
+
+.chat-delete-btn:active {
+  opacity: 0.8;
+  background: rgba(255, 77, 79, 0.1);
+}
+
+.chat-delete-disabled {
+  opacity: 0.2;
+  pointer-events: none;
+}
+
+.chat-deleting-spinner {
+  font-size: 24rpx;
+  animation: chat-spin 1s linear infinite;
+}
+
+@keyframes chat-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 // ========== 状态指示 ==========

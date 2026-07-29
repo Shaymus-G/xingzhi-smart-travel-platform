@@ -3,14 +3,20 @@
  * 首页 — 城市与旅游资源浏览入口
  * 加载热门城市 + 热门景点，支持城市等级筛选
  */
-import { ref, onMounted } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
+import { onShow } from '@dcloudio/uni-app'
 import NavBar from '@/components/NavBar.vue'
 import CityCard from '@/components/CityCard.vue'
 import ScenicCard from '@/components/ScenicCard.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import Loading from '@/components/Loading.vue'
+import RecommendationSection from '@/components/RecommendationSection.vue'
 import { getCities, getScenics } from '@/api/travel'
+import { getCollaborativeCities } from '@/api/recommend'
+import { normalizeRecommendCity } from '@/utils/recommend'
+import { useUserStore } from '@/stores/user'
 import type { City, ScenicSpot } from '@/types/travel'
+import type { CollaborativeRecommendCity, NormalizedRecommendCity } from '@/types/recommend'
 
 // ========== 数据状态 ==========
 const cities = ref<City[]>([])
@@ -19,16 +25,131 @@ const loading = ref(false)
 const errorMsg = ref('')
 const selectedLevel = ref('热门')
 
+const CITY_CANDIDATE_LIMIT = 50
+const CITY_DISPLAY_LIMIT = 10
+let citiesRequestVersion = 0
+
+// ========== 用户状态 ==========
+
+const userStore = useUserStore()
+
+// ========== Collaborative 推荐状态 ==========
+
+const COLLABORATIVE_LIMIT = 8
+
+interface CollaborativeState {
+  cities: NormalizedRecommendCity[]
+  loading: boolean
+  error: string | null
+  loaded: boolean
+}
+
+const collaborativeState = reactive<CollaborativeState>({
+  cities: [],
+  loading: false,
+  error: null,
+  loaded: false,
+})
+
 // ========== 方法 ==========
 
-async function loadCities() {
+/** 标准化省份分组键：trim + 空值统一 */
+function normalizeProvinceKey(
+  province: string | null | undefined,
+): string {
+  const value = province?.trim()
+  return value || '__UNKNOWN_PROVINCE__'
+}
+
+/** 城市多样化：去重 → 按省份分组 → Round-Robin → 取 displayLimit 条 */
+function diversifyCities(
+  candidates: City[],
+  displayLimit: number,
+): City[] {
+  const source = Array.isArray(candidates) ? candidates : []
+  const seenCityIds = new Set<number>()
+  const validCities: City[] = []
+
+  for (const city of source) {
+    if (!city || typeof city !== 'object') continue
+    if (
+      !Number.isFinite(city.id) ||
+      !Number.isInteger(city.id) ||
+      city.id <= 0 ||
+      seenCityIds.has(city.id)
+    ) {
+      continue
+    }
+    seenCityIds.add(city.id)
+    validCities.push(city)
+  }
+
+  const provinceGroups = new Map<string, City[]>()
+  const provinceOrder: string[] = []
+
+  for (const city of validCities) {
+    const key = normalizeProvinceKey(city.province)
+    let group = provinceGroups.get(key)
+    if (!group) {
+      group = []
+      provinceGroups.set(key, group)
+      provinceOrder.push(key)
+    }
+    group.push(city)
+  }
+
+  const result: City[] = []
+  const groupIndexes = new Map<string, number>()
+  for (const key of provinceOrder) {
+    groupIndexes.set(key, 0)
+  }
+
+  while (result.length < displayLimit) {
+    let addedInRound = false
+    for (const key of provinceOrder) {
+      const group = provinceGroups.get(key)
+      const index = groupIndexes.get(key) ?? 0
+      if (!group || index >= group.length) continue
+      result.push(group[index])
+      groupIndexes.set(key, index + 1)
+      addedInRound = true
+      if (result.length >= displayLimit) break
+    }
+    if (!addedInRound) break
+  }
+
+  return result
+}
+
+/** 加载城市列表（候选池 + 多样化 + 竞态保护） */
+async function loadCities(): Promise<void> {
+  const requestVersion = ++citiesRequestVersion
+  const requestedLevel = selectedLevel.value
+
   try {
     const data = await getCities({
-      level: selectedLevel.value,
-      limit: 10,
+      level: requestedLevel,
+      limit: CITY_CANDIDATE_LIMIT,
     })
-    cities.value = data || []
+
+    if (
+      requestVersion !== citiesRequestVersion ||
+      requestedLevel !== selectedLevel.value
+    ) {
+      return
+    }
+
+    cities.value = diversifyCities(
+      Array.isArray(data) ? data : [],
+      CITY_DISPLAY_LIMIT,
+    )
   } catch (err) {
+    if (
+      requestVersion !== citiesRequestVersion ||
+      requestedLevel !== selectedLevel.value
+    ) {
+      return
+    }
     console.error('[Home] loadCities error:', err)
   }
 }
@@ -57,8 +178,9 @@ async function loadAll() {
 }
 
 function onLevelChange(level: string) {
+  if (selectedLevel.value === level) return
   selectedLevel.value = level
-  loadCities()
+  void loadCities()
 }
 
 let navigating = false
@@ -90,7 +212,6 @@ function goCityDetail(id: number | string) {
     },
     fail(err) {
       console.error('[home] navigate city/detail primary failed:', JSON.stringify(err))
-      // 尝试不带前导斜杠的 fallback
       uni.navigateTo({
         url: fallbackUrl,
         success(res2) {
@@ -107,7 +228,6 @@ function goCityDetail(id: number | string) {
     },
     complete(res) {
       console.log('[home] navigate city/detail primary complete:', JSON.stringify(res))
-      // 如果 primary success 已调用 resetNavigating，这里做兜底
       if (navigating) resetNavigating()
     },
   })
@@ -159,9 +279,103 @@ function goAiChat() {
   uni.switchTab({ url: '/pages/ai/chat' })
 }
 
+// ========== Collaborative ==========
+
+let collaborativeRequestVersion = 0
+
+/** 标准化协同过滤推荐列表：标准化、过滤无效 ID、按 ID 去重、保序、限制数量 */
+function normalizeCollaborativeCities(
+  rawCities: CollaborativeRecommendCity[],
+): NormalizedRecommendCity[] {
+  const source = Array.isArray(rawCities) ? rawCities : []
+  const seen = new Set<number>()
+  const result: NormalizedRecommendCity[] = []
+
+  for (const rawCity of source) {
+    const city = normalizeRecommendCity(rawCity)
+
+    if (
+      !Number.isFinite(city.id) ||
+      !Number.isInteger(city.id) ||
+      city.id <= 0 ||
+      seen.has(city.id)
+    ) {
+      continue
+    }
+
+    seen.add(city.id)
+    result.push(city)
+
+    if (result.length >= COLLABORATIVE_LIMIT) {
+      break
+    }
+  }
+
+  return result
+}
+
+/** 重置协同过滤状态（退出登录时调用，使旧请求失效） */
+function resetCollaborativeState(): void {
+  collaborativeRequestVersion += 1
+  collaborativeState.cities = []
+  collaborativeState.loading = false
+  collaborativeState.error = null
+  collaborativeState.loaded = false
+}
+
+/** 加载协同过滤推荐 */
+async function loadCollaborative(): Promise<void> {
+  if (!userStore.isLoggedIn) {
+    resetCollaborativeState()
+    return
+  }
+
+  if (collaborativeState.loading || collaborativeState.loaded) {
+    return
+  }
+
+  const requestVersion = ++collaborativeRequestVersion
+
+  collaborativeState.loading = true
+  collaborativeState.error = null
+
+  try {
+    const rawCities = await getCollaborativeCities(COLLABORATIVE_LIMIT)
+
+    if (requestVersion !== collaborativeRequestVersion) {
+      return
+    }
+
+    collaborativeState.cities = normalizeCollaborativeCities(rawCities)
+    collaborativeState.loaded = true
+  } catch (error: unknown) {
+    if (requestVersion !== collaborativeRequestVersion) {
+      return
+    }
+
+    collaborativeState.cities = []
+    const message = error instanceof Error ? error.message.trim() : ''
+    collaborativeState.error = message || '个性化推荐加载失败'
+    collaborativeState.loaded = false
+  } finally {
+    if (requestVersion === collaborativeRequestVersion) {
+      collaborativeState.loading = false
+    }
+  }
+}
+
 // ========== 生命周期 ==========
+
 onMounted(() => {
   loadAll()
+})
+
+onShow(() => {
+  if (!userStore.isLoggedIn) {
+    resetCollaborativeState()
+    return
+  }
+  void loadCollaborative()
 })
 </script>
 
@@ -170,6 +384,18 @@ onMounted(() => {
     <NavBar title="行知 · 发现城市" />
 
     <scroll-view class="home-scroll" scroll-y enhanced :show-scrollbar="false">
+      <!-- 猜你喜欢 -->
+      <RecommendationSection
+        v-if="
+          userStore.isLoggedIn &&
+          collaborativeState.cities.length > 0
+        "
+        title="猜你喜欢"
+        :cities="collaborativeState.cities"
+        variant="collaborative"
+        @click="goCityDetail"
+      />
+
       <!-- 城市等级筛选 -->
       <view class="home-tabs">
         <view

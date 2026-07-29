@@ -94,6 +94,57 @@ function normalizeNonNegativeNumber(
   return normalizeNullableNumber(raw, warnings, path, false)
 }
 
+// ==================== 坐标规范化 ====================
+
+/**
+ * 规范化单个坐标值
+ *
+ * - null/undefined → null
+ * - number: 检查 isFinite + 范围
+ * - string: 尝试 Number() 解析后检查
+ * - 其他类型 → null
+ * - 不将无效值转为 0，不伪造坐标
+ *
+ * @param raw      原始值
+ * @param warnings 警告收集
+ * @param path     字段路径
+ * @param min      有效范围最小值（纬度 -90，经度 -180）
+ * @param max      有效范围最大值（纬度 90，经度 180）
+ */
+function normalizeCoordinate(
+  raw: unknown,
+  warnings: NormalizeWarning[],
+  path: string,
+  min: number,
+  max: number,
+): number | null {
+  if (raw === null || raw === undefined) return null
+
+  let value: number
+
+  if (typeof raw === 'number') {
+    value = raw
+  } else if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (trimmed === '') return null
+    value = Number(trimmed)
+  } else {
+    return null
+  }
+
+  if (!Number.isFinite(value)) {
+    warn(warnings, path, 'NON_FINITE_COORD', '坐标为 Infinity 或 NaN', raw)
+    return null
+  }
+
+  if (value < min || value > max) {
+    warn(warnings, path, 'COORD_OUT_OF_RANGE', `坐标值 ${value} 超出范围 [${min}, ${max}]`, raw)
+    return null
+  }
+
+  return value
+}
+
 // ==================== 字符串规范化 ====================
 
 function normalizeString(raw: unknown, path: string, defaultVal: string = ''): string {
@@ -187,6 +238,8 @@ function normalizeDestination(
       city_id: cityId,
       name: normalizeString(raw.name, `${path}.name`, ''),
       province: normalizeString(raw.province, `${path}.province`, ''),
+      latitude: normalizeCoordinate(raw.latitude, warnings, `${path}.latitude`, -90, 90),
+      longitude: normalizeCoordinate(raw.longitude, warnings, `${path}.longitude`, -180, 180),
     }
   }
 
@@ -196,11 +249,13 @@ function normalizeDestination(
       city_id: null,
       name: raw.trim(),
       province: '',
+      latitude: null,
+      longitude: null,
     }
   }
 
   warn(warnings, path, 'INVALID_DESTINATION', 'destination 格式无效', raw)
-  return { city_id: null, name: '', province: '' }
+  return { city_id: null, name: '', province: '', latitude: null, longitude: null }
 }
 
 // ==================== budget 规范化 ====================
@@ -270,6 +325,13 @@ function normalizeTimelineItem(
     estimated_cost: normalizeNonNegativeNumber(raw.estimated_cost, warnings, `${path}.estimated_cost`),
     reason: normalizeNullableString(raw.reason),
     transport_to_next: normalizeNullableString(raw.transport_to_next),
+    // 坐标字段 — 兼容别名 (lat/lng/lon)，允许负数（经度可为负）
+    latitude: normalizeCoordinate(raw.latitude ?? raw.lat, warnings, `${path}.latitude`, -90, 90),
+    longitude: normalizeCoordinate(raw.longitude ?? raw.lng ?? raw.lon, warnings, `${path}.longitude`, -180, 180),
+    city: normalizeNullableString(raw.city),
+    district: normalizeNullableString(raw.district),
+    poi_id: normalizeNullableString(raw.poi_id),
+    coordinate_system: normalizeNullableString(raw.coordinate_system),
   }
 }
 
@@ -292,6 +354,9 @@ function normalizeMeal(
     resource_id: normalizeResourceId(raw.resource_id, warnings, `${path}.resource_id`),
     name: normalizeString(raw.name, `${path}.name`, '未命名用餐'),
     estimated_cost: normalizeNonNegativeNumber(raw.estimated_cost, warnings, `${path}.estimated_cost`),
+    latitude: normalizeCoordinate(raw.latitude ?? raw.lat, warnings, `${path}.latitude`, -90, 90),
+    longitude: normalizeCoordinate(raw.longitude ?? raw.lng ?? raw.lon, warnings, `${path}.longitude`, -180, 180),
+    city: normalizeNullableString(raw.city),
   }
 }
 
@@ -315,6 +380,9 @@ function normalizeHotel(
     name: normalizeString(raw.name, `${path}.name`, '未命名住宿'),
     address: normalizeNullableString(raw.address),
     estimated_cost: normalizeNonNegativeNumber(raw.estimated_cost, warnings, `${path}.estimated_cost`),
+    latitude: normalizeCoordinate(raw.latitude ?? raw.lat, warnings, `${path}.latitude`, -90, 90),
+    longitude: normalizeCoordinate(raw.longitude ?? raw.lng ?? raw.lon, warnings, `${path}.longitude`, -180, 180),
+    city: normalizeNullableString(raw.city),
   }
 }
 
@@ -379,6 +447,12 @@ function emptyTimelineItem(): PlanTimelineItem {
     estimated_cost: null,
     reason: null,
     transport_to_next: null,
+    latitude: null,
+    longitude: null,
+    city: null,
+    district: null,
+    poi_id: null,
+    coordinate_system: null,
   }
 }
 
@@ -390,6 +464,9 @@ function emptyMeal(): PlanMeal {
     resource_id: null,
     name: '未知用餐',
     estimated_cost: null,
+    latitude: null,
+    longitude: null,
+    city: null,
   }
 }
 

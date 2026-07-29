@@ -2,7 +2,8 @@
 /**
  * 旅行计划详情页面 — 使用 normalizer 安全渲染 plan_json
  */
-import { ref, onMounted } from 'vue'
+import { ref } from 'vue'
+import { onLoad, onUnload } from '@dcloudio/uni-app'
 import NavBar from '@/components/NavBar.vue'
 import { getPlanDetail, deletePlan } from '@/api/travel'
 import type { TravelPlan } from '@/types/travel'
@@ -21,6 +22,25 @@ import type { TravelResourceType } from '@/types/resource'
 import { isNavigableResourceType } from '@/types/resource'
 import type { TransitEndpointType } from '@/types/transit'
 import TransitRoutePanel from '@/components/TransitRoutePanel.vue'
+import {
+  normalizeLocation,
+  buildSearchKeyword,
+  buildAmapViewUrl,
+  buildAmapNavigationUrl,
+  buildAmapWebUrl,
+  buildAmapRouteUrl,
+  buildAmapRouteWebUrl,
+  mapTransitMethodToAmapMode,
+  openExternalUrl,
+  preopenBlankWindow,
+  setOpenedWindowUrl,
+  copyLocationInfo,
+  fetchResourceCoordinates,
+  clearResourceCache,
+  resolveRouteEndpoints,
+} from '@/utils/amap'
+import type { AmapLocation, MapAction } from '@/utils/amap'
+import { buildFullPlanShareText, buildDayShareText, shareText, copyShareText } from '@/utils/plan-share'
 
 // ========== 错误类型 ==========
 type PlanLoadError = 'invalidId' | 'notFound' | 'network' | 'unknown'
@@ -33,23 +53,309 @@ const planId = ref(0)
 const hasFallbackMarkdown = ref(false)
 const loadError = ref<PlanLoadError | null>(null)
 const isDeleting = ref(false)
-let _loading = false // 并发锁
+let _loading = false   // 并发锁
+let _loadSeq = 0       // 请求序号（诊断用）
+
+// ========== 地图入口 ==========
+
+/** 正在查询坐标的节点 key */
+const mapLoadingKeys = ref<Set<string>>(new Set())
+
+/** 正在加载高德路线的段 key */
+const routeLoadingKeys = ref<Set<string>>(new Set())
+
+function nodeKey(kind: string, dayIndex: number, itemIndex: number): string {
+  return `${kind}:${dayIndex}:${itemIndex}`
+}
+
+function routeKey(dayIndex: number, itemIndex: number): string {
+  return `route:${dayIndex}:${itemIndex}`
+}
+
+/** 将 PlanTimelineItem 转为 AmapLocation */
+function toAmapLocation(item: PlanTimelineItem): AmapLocation {
+  return {
+    name: item.name,
+    address: item.address,
+    city: item.city,
+    latitude: item.latitude,
+    longitude: item.longitude,
+    resourceType: item.resource_type !== 'unknown' ? item.resource_type : null,
+    resourceId: item.resource_id,
+  }
+}
+
+/**
+ * 处理 TransitRoutePanel 发出的高德路线事件
+ */
+async function handleOpenAmapRoute(
+  fromItem: PlanTimelineItem,
+  toItem: PlanTimelineItem,
+  dayIndex: number,
+  itemIndex: number,
+  payload: { method: string },
+): Promise<void> {
+  const method = payload?.method || 'driving'
+  const key = routeKey(dayIndex, itemIndex)
+
+  if (import.meta.env.DEV) {
+    console.log('[amap-route] parent handler entered', {
+      from: fromItem.name,
+      to: toItem.name,
+      dayIndex,
+      itemIndex,
+      method,
+    })
+  }
+
+  if (routeLoadingKeys.value.has(key)) return
+
+  // 同步设置 loading（必须在任何 await 之前）
+  const newSet = new Set(routeLoadingKeys.value)
+  newSet.add(key)
+  routeLoadingKeys.value = newSet
+
+  // H5：在用户点击同步栈中预开空白窗口（防止浏览器拦截异步 window.open）
+  // #ifdef H5
+  const pendingWindow = preopenBlankWindow()
+  // #endif
+
+  try {
+    if (import.meta.env.DEV) {
+      console.log('[amap-route] endpoints resolving')
+    }
+    const fromLoc = toAmapLocation(fromItem)
+    const toLoc = toAmapLocation(toItem)
+    const [fromCoord, toCoord] = await resolveRouteEndpoints(fromLoc, toLoc)
+
+    if (!routeLoadingKeys.value.has(key)) return
+
+    if (import.meta.env.DEV) {
+      console.log('[amap-route] endpoints resolved', {
+        fromOk: fromCoord !== null,
+        toOk: toCoord !== null,
+      })
+    }
+
+    if (!fromCoord || !toCoord) {
+      const missingName = !fromCoord ? fromItem.name : toItem.name
+      // #ifdef H5
+      if (pendingWindow && !pendingWindow.closed) pendingWindow.close()
+      // #endif
+      uni.showToast({
+        title: `"${missingName}"缺少有效坐标，无法生成精确路线`,
+        icon: 'none',
+        duration: 3000,
+      })
+      // 同时复制路线信息作为备用
+      uni.setClipboardData({
+        data: `${fromItem.name} → ${toItem.name}`,
+        showToast: false,
+      })
+      return
+    }
+
+    const mode = mapTransitMethodToAmapMode(method)
+    const appUrl = buildAmapRouteUrl(fromCoord, fromItem.name, toCoord, toItem.name, mode)
+    const webUrl = buildAmapRouteWebUrl(fromCoord, fromItem.name, toCoord, toItem.name, mode)
+
+    if (import.meta.env.DEV) {
+      console.log('[amap-route] URL built', { mode })
+    }
+
+    // #ifdef H5
+    if (pendingWindow && !pendingWindow.closed) {
+      setOpenedWindowUrl(pendingWindow, webUrl)
+    } else {
+      openExternalUrl(appUrl, webUrl, `${fromItem.name} → ${toItem.name}`)
+    }
+    // #endif
+    // #ifdef APP-PLUS
+    openExternalUrl(appUrl, webUrl, `${fromItem.name} → ${toItem.name}`)
+    // #endif
+  } catch (err: unknown) {
+    if (!routeLoadingKeys.value.has(key)) return
+    // #ifdef H5
+    if (pendingWindow && !pendingWindow.closed) pendingWindow.close()
+    // #endif
+    const msg = err instanceof Error ? err.message : '路线打开失败'
+    uni.showToast({ title: msg, icon: 'none', duration: 3000 })
+    uni.setClipboardData({
+      data: `${fromItem.name} → ${toItem.name}`,
+      showToast: false,
+    })
+  } finally {
+    const newSet2 = new Set(routeLoadingKeys.value)
+    newSet2.delete(key)
+    routeLoadingKeys.value = newSet2
+  }
+}
+
+/** 构建地点信息对象 */
+function buildLocationInfo(
+  item: PlanTimelineItem | PlanMeal | PlanHotel,
+): { name: string; address: string | null; city: string | null; lat: number | null; lng: number | null } {
+  return {
+    name: item.name,
+    address: 'address' in item ? (item.address ?? null) : null,
+    city: 'city' in item ? (item.city ?? null) : null,
+    lat: 'latitude' in item ? (item.latitude ?? null) : null,
+    lng: 'longitude' in item ? (item.longitude ?? null) : null,
+  }
+}
+
+/**
+ * 地图按钮点击处理
+ *
+ * 三层降级：
+ *   1. 节点自带坐标 → 直接打开高德
+ *   2. resource_type + resource_id → 延迟查询资源详情
+ *   3. 名称 + 地址 + 城市 → 高德搜索
+ */
+async function handleOpenMap(
+  item: PlanTimelineItem | PlanMeal | PlanHotel,
+  dayIndex: number,
+  itemIndex: number,
+): Promise<void> {
+  const key = nodeKey('map', dayIndex, itemIndex)
+  if (mapLoadingKeys.value.has(key)) return
+
+  const info = buildLocationInfo(item)
+
+  // 第一优先级：节点自带坐标
+  const directLoc = normalizeLocation(info.lat, info.lng)
+
+  if (directLoc) {
+    showMapActionSheet(info.name, info.address, info.city, directLoc)
+    return
+  }
+
+  // 第二优先级：延迟查询资源详情
+  if (
+    isNavigableResourceType(item.resource_type) &&
+    item.resource_id !== null &&
+    item.resource_id > 0
+  ) {
+    const newSet = new Set(mapLoadingKeys.value)
+    newSet.add(key)
+    mapLoadingKeys.value = newSet
+
+    try {
+      const detail = await fetchResourceCoordinates(item.resource_type, item.resource_id)
+      if (detail) {
+        const loc = normalizeLocation(detail.latitude, detail.longitude)
+        const detailCity = detail.city || info.city
+        const detailAddr = detail.address || info.address
+        showMapActionSheet(info.name, detailAddr, detailCity, loc)
+        return
+      }
+    } catch {
+      // 查询失败 → 降级到搜索
+    } finally {
+      const newSet2 = new Set(mapLoadingKeys.value)
+      newSet2.delete(key)
+      mapLoadingKeys.value = newSet2
+    }
+  }
+
+  // 第三优先级：名称搜索
+  const fallbackCity = info.city || normalizedPlan.value?.destination?.name || null
+  showMapActionSheet(info.name, info.address, fallbackCity, null)
+}
+
+/** 显示操作菜单 */
+function showMapActionSheet(
+  name: string,
+  address: string | null,
+  city: string | null,
+  loc: { latitude: number; longitude: number } | null,
+): void {
+  const keyword = buildSearchKeyword(name, address, city, normalizedPlan.value?.destination?.name ?? null)
+  const itemList: string[] = loc
+    ? ['查看地点', '从当前位置前往']
+    : ['在高德地图中搜索']
+
+  uni.showActionSheet({
+    itemList,
+    success(res) {
+      let action: MapAction = 'view'
+      if (loc && res.tapIndex === 1) {
+        action = 'navigate'
+      }
+      openMapUrl(action, loc, keyword, name, address)
+    },
+  })
+}
+
+/** 打开地图 URL */
+function openMapUrl(
+  action: MapAction,
+  loc: { latitude: number; longitude: number } | null,
+  keyword: string,
+  name: string,
+  address: string | null,
+): void {
+  const viewUrl = buildAmapViewUrl(loc, keyword)
+  const webUrl = buildAmapWebUrl(loc, keyword)
+  let appUrl = viewUrl
+
+  if (action === 'navigate' && loc) {
+    const navUrl = buildAmapNavigationUrl(loc, keyword)
+    if (navUrl) appUrl = navUrl
+  }
+
+  // 打开中：openExternalUrl 内部有三级降级（URI → Web → 复制）
+  openExternalUrl(appUrl, webUrl, `${name} ${address || ''}`.trim())
+}
 
 // ========== 生命周期 ==========
-onMounted(() => {
-  const pages = getCurrentPages()
-  const currentPage = pages[pages.length - 1] as any
-  planId.value = Number(currentPage?.options?.id) || 0
+onUnload(() => {
+  clearResourceCache()
+})
+
+onLoad((options: Record<string, string> | undefined) => {
+  if (import.meta.env.DEV) {
+    console.log('[plan-detail] onLoad fired', { options, timestamp: Date.now() })
+  }
+  const rawId = options?.id
+  const idNum = Number(rawId)
+  if (!rawId || !Number.isFinite(idNum) || !Number.isInteger(idNum) || idNum <= 0) {
+    if (import.meta.env.DEV) {
+      console.warn('[plan-detail] invalid planId', { rawId, idNum })
+    }
+    loadError.value = 'invalidId'
+    isLoading.value = false
+    return
+  }
+  planId.value = idNum
+  if (import.meta.env.DEV) {
+    console.log('[plan-detail] planId set, calling loadPlan', { planId: idNum })
+  }
   void loadPlan()
 })
 
 // ========== 数据加载 ==========
 
 async function loadPlan(): Promise<void> {
-  if (_loading) return
+  const seq = ++_loadSeq
+  const t0 = Date.now()
+
+  if (import.meta.env.DEV) {
+    console.log(`[plan-detail] loadPlan#${seq} enter`, { _loading, planId: planId.value, t0 })
+  }
+
+  if (_loading) {
+    if (import.meta.env.DEV) {
+      console.warn(`[plan-detail] loadPlan#${seq} blocked by _loading lock`)
+    }
+    return
+  }
   if (planId.value <= 0) {
     loadError.value = 'invalidId'
     isLoading.value = false
+    if (import.meta.env.DEV) {
+      console.warn(`[plan-detail] loadPlan#${seq} planId <= 0, aborted`)
+    }
     return
   }
 
@@ -61,11 +367,34 @@ async function loadPlan(): Promise<void> {
   hasFallbackMarkdown.value = false
 
   try {
+    if (import.meta.env.DEV) {
+      console.log(`[plan-detail] loadPlan#${seq} calling getPlanDetail(${planId.value})`)
+    }
+    const t1 = Date.now()
     plan.value = await getPlanDetail(planId.value)
+    if (import.meta.env.DEV) {
+      console.log(`[plan-detail] loadPlan#${seq} getPlanDetail resolved`, {
+        elapsed: Date.now() - t1,
+        hasPlan: plan.value != null,
+        hasPlanJson: plan.value?.plan_json != null,
+        hasMarkdown: plan.value?.markdown != null,
+      })
+    }
 
     // 通过 normalizer 安全获取结构化数据
+    if (import.meta.env.DEV) {
+      console.log(`[plan-detail] loadPlan#${seq} calling normalizer`)
+    }
+    const t2 = Date.now()
     const result = normalizeTravelPlanRecord(plan.value)
     normalizedPlan.value = result.data
+    if (import.meta.env.DEV) {
+      console.log(`[plan-detail] loadPlan#${seq} normalizer done`, {
+        elapsed: Date.now() - t2,
+        hasData: result.data != null,
+        warningCount: result.warnings.length,
+      })
+    }
 
     // 开发环境输出 warning
     if (import.meta.env.DEV && result.warnings.length > 0) {
@@ -77,10 +406,25 @@ async function loadPlan(): Promise<void> {
       hasFallbackMarkdown.value = true
     }
   } catch (err: unknown) {
+    if (import.meta.env.DEV) {
+      console.error(`[plan-detail] loadPlan#${seq} catch`, {
+        elapsed: Date.now() - t0,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
     loadError.value = classifyPlanLoadError(err)
   } finally {
     isLoading.value = false
     _loading = false
+    if (import.meta.env.DEV) {
+      console.log(`[plan-detail] loadPlan#${seq} finally`, {
+        totalElapsed: Date.now() - t0,
+        isLoading: isLoading.value,
+        hasPlan: plan.value != null,
+        hasNormalized: normalizedPlan.value != null,
+        loadError: loadError.value,
+      })
+    }
   }
 }
 
@@ -148,6 +492,48 @@ function goRegenerate(): void {
   }
 
   uni.navigateTo({ url: `/pages/plan/generate?${params.join('&')}` })
+}
+
+// ========== 分享 ==========
+
+/** 分享完整计划 */
+function handleShareFullPlan(): void {
+  if (!plan.value || !normalizedPlan.value) return
+
+  uni.showActionSheet({
+    itemList: ['系统分享', '复制行程文本'],
+    success(res) {
+      const text = buildFullPlanShareText(plan.value!, normalizedPlan.value!)
+      const title = normalizedPlan.value?.title || plan.value?.title || '旅行计划'
+      if (res.tapIndex === 0) {
+        void shareText(title, text)
+      } else {
+        void copyShareText(text)
+      }
+    },
+  })
+}
+
+/** 分享单日行程 */
+function handleShareDay(dayIndex: number): void {
+  if (!normalizedPlan.value) return
+  const day = normalizedPlan.value.itinerary[dayIndex]
+  if (!day) return
+
+  const destName = normalizedPlan.value.destination.name || plan.value?.destination || ''
+
+  uni.showActionSheet({
+    itemList: ['系统分享', '复制行程文本'],
+    success(res) {
+      const text = buildDayShareText(day, destName)
+      const title = `${destName}第 ${day.day} 天行程`
+      if (res.tapIndex === 0) {
+        void shareText(title, text)
+      } else {
+        void copyShareText(text)
+      }
+    },
+  })
 }
 
 // ========== 展示常量 ==========
@@ -307,8 +693,11 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
 
         <view v-for="(day, di) in normalizedPlan.itinerary" :key="di" class="day-card">
           <view class="day-header">
-            <text class="day-num">第 {{ day.day }} 天</text>
-            <text class="day-theme" v-if="day.theme">{{ day.theme }}</text>
+            <view class="day-header-left">
+              <text class="day-num">第 {{ day.day }} 天</text>
+              <text class="day-theme" v-if="day.theme">{{ day.theme }}</text>
+            </view>
+            <text class="day-share-btn" @tap.stop="handleShareDay(di)">分享当天</text>
           </view>
 
           <text class="day-summary" v-if="day.summary">{{ day.summary }}</text>
@@ -342,7 +731,7 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
                   🚗 {{ item.transport_to_next }}
                 </text>
 
-                <!-- 实时路线 -->
+                <!-- 实时路线 + 高德两点路线 -->
                 <TransitRoutePanel
                   v-if="getTransitSegment(day.items, ii)"
                   :origin-type="getTransitSegment(day.items, ii)!.originType"
@@ -352,6 +741,14 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
                   :destination-id="getTransitSegment(day.items, ii)!.destinationId"
                   :destination-name="getTransitSegment(day.items, ii)!.destinationName"
                   :city="transitCity()"
+                  :amap-loading="routeLoadingKeys.has(routeKey(di, ii))"
+                  @open-amap-route="handleOpenAmapRoute(
+                    day.items[ii],
+                    day.items[ii + 1],
+                    di,
+                    ii,
+                    $event
+                  )"
                 />
               </view>
             </view>
@@ -378,7 +775,14 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
               :class="{ 'tl-name-link': canOpenResource(day.hotel.resource_type, day.hotel.resource_id) }"
               @tap="canOpenResource(day.hotel.resource_type, day.hotel.resource_id) && handleResourceTap(day.hotel.resource_type, day.hotel.resource_id)"
             >{{ day.hotel.name }}</text>
-            <text class="tl-meta" v-if="day.hotel.address">📍 {{ day.hotel.address }}</text>
+            <view class="tl-address-row" v-if="day.hotel.address || day.hotel.name">
+              <text class="tl-meta" v-if="day.hotel.address">📍 {{ day.hotel.address }}</text>
+              <text
+                class="tl-map-btn"
+                :class="{ loading: mapLoadingKeys.has(nodeKey('hotel', di, 0)) }"
+                @tap.stop="handleOpenMap(day.hotel, di, 0)"
+              >{{ mapLoadingKeys.has(nodeKey('hotel', di, 0)) ? '查询中...' : '🗺️ 地图' }}</text>
+            </view>
             <text class="tl-cost" v-if="day.hotel.estimated_cost !== null">💰 {{ fmtCost(day.hotel.estimated_cost) }}</text>
           </view>
 
@@ -432,6 +836,9 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
 
       <!-- 操作区 -->
       <view class="detail-actions">
+        <view class="detail-action-btn" @tap="handleShareFullPlan">
+          <text>分享计划</text>
+        </view>
         <view class="detail-action-btn" @tap="goRegenerate">
           <text>重新生成</text>
         </view>
@@ -489,6 +896,8 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
   border-radius: 16rpx;
   padding: 24rpx;
   margin-bottom: 20rpx;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .info-title {
@@ -554,8 +963,17 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
 .day-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 16rpx;
   margin-bottom: 12rpx;
+}
+
+.day-header-left {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  min-width: 0;
+  flex: 1;
 }
 
 .day-num {
@@ -564,12 +982,28 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
   font-size: 24rpx;
   padding: 4rpx 16rpx;
   border-radius: 8rpx;
+  flex-shrink: 0;
 }
 
 .day-theme {
   font-size: 28rpx;
   font-weight: 600;
   color: #333;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// Day share button
+.day-share-btn {
+  font-size: 24rpx;
+  color: #4A90D9;
+  padding: 6rpx 16rpx;
+  border: 1rpx solid #4A90D9;
+  border-radius: 8rpx;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .day-summary {
@@ -612,18 +1046,25 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
 
 .timeline-content {
   flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .tl-header {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
+  min-width: 0;
 }
 
 .tl-name {
   font-size: 28rpx;
   font-weight: 600;
   color: #333;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .tl-name-link {
@@ -637,6 +1078,8 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
   background: #f0f0f0;
   padding: 2rpx 12rpx;
   border-radius: 8rpx;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .tl-meta {
@@ -644,6 +1087,38 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
   color: #999;
   display: block;
   margin-top: 4rpx;
+}
+
+// Map button
+.tl-address-row {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  margin-top: 4rpx;
+  min-width: 0;
+
+  .tl-meta {
+    margin-top: 0;
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+}
+
+.tl-map-btn {
+  font-size: 22rpx;
+  color: #4A90D9;
+  padding: 4rpx 12rpx;
+  border: 1rpx solid #4A90D9;
+  border-radius: 8rpx;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.tl-map-btn.loading {
+  color: #999;
+  border-color: #ccc;
 }
 
 .tl-cost {
