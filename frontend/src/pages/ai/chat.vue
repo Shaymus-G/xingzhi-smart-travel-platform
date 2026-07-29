@@ -15,6 +15,7 @@ import NavBar from '@/components/NavBar.vue'
 import { sendChatMessage, getAISessions, deleteAISession } from '@/api/ai'
 import { useUserStore } from '@/stores/user'
 import type { ChatMessage } from '@/types/ai'
+import { markdownToHtml } from '@/utils/markdown'
 
 const userStore = useUserStore()
 
@@ -338,6 +339,21 @@ function goLogin() {
   uni.navigateTo({ url: '/pages/auth/login' })
 }
 
+// ========== Markdown 渲染 ==========
+
+/** 将消息内容转为 HTML 字符串（仅 AI 消息使用 Markdown） */
+function renderedContent(msg: ChatMessage): string {
+  if (msg.role === 'assistant') {
+    return markdownToHtml(msg.content)
+  }
+  // 用户消息保持纯文本，但转义 HTML
+  return msg.content
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\n/g, '<br>')
+}
+
 // ========== 页面生命周期 ==========
 onShow(() => {
   pageActive = true
@@ -409,7 +425,8 @@ onUnload(() => {
       >
         <view class="chat-bubble-row" :class="{ 'chat-bubble-row-self': msg.role === 'user' }">
           <view class="chat-bubble" :class="msg.role">
-            <text>{{ msg.content }}</text>
+            <rich-text v-if="msg.role === 'assistant'" :nodes="renderedContent(msg)" />
+            <text v-else>{{ msg.content }}</text>
           </view>
 
           <!-- 删除按钮（仅服务端消息） -->
@@ -491,13 +508,18 @@ onUnload(() => {
 
 .chat-list {
   flex: 1;
-  padding: 16rpx 32rpx;
+  padding: 16rpx 24rpx;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .chat-message {
   margin-bottom: 24rpx;
   display: flex;
   flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .chat-message-self {
@@ -510,18 +532,24 @@ onUnload(() => {
   border-radius: 16rpx;
   font-size: 28rpx;
   line-height: 1.6;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .chat-bubble.user {
   background: #4A90D9;
   color: #fff;
   border-bottom-right-radius: 4rpx;
+  margin-right: 0;
 }
 
 .chat-bubble.assistant {
   background: #fff;
   color: #333;
   border-bottom-left-radius: 4rpx;
+  max-width: 85%;
 }
 
 // ========== 顶部操作区 ==========

@@ -6,6 +6,7 @@
  */
 import { getToken, clearAuthStorage } from '@/utils/storage'
 import { getApiBaseUrl } from '@/config/runtime'
+import { appendQueryParams, type QueryValue } from '@/utils/query'
 
 /**
  * 后端 API 基础地址 — 运行时动态读取
@@ -42,6 +43,30 @@ export class ApiError extends Error {
 export interface RequestExtraOptions {
   /** 覆盖全局默认超时 (ms) */
   timeout?: number
+  /**
+   * URL Query 参数 — 追加到请求 URL 末尾。
+   *
+   * - undefined 值被跳过
+   * - null 值作为空值发送（`key=`）
+   * - false / 0 正常发送（不会被误删）
+   * - 数组每一项作为独立同名参数
+   * - 嵌套对象被跳过
+   * - 字符串自动编码
+   */
+  query?: Record<string, QueryValue>
+  /**
+   * 是否注入 Authorization header。
+   *
+   * @default true
+   */
+  auth?: boolean
+  /**
+   * 收到 401/403 时是否清除登录态并跳转登录页。
+   *
+   * @default true — 受保护接口需要跳转
+   * 设为 false 用于公开接口（如分享页面），401 仅返回错误不跳转。
+   */
+  redirectOnUnauthorized?: boolean
 }
 
 /**
@@ -57,15 +82,20 @@ export function toBody<T>(data: T): Record<string, unknown> {
 /**
  * 发起 HTTP 请求
  *
+ * @param url     API 路径（相对于 Base URL）
+ * @param options uni.request 原生选项（method / data / header 等）
+ * @param extra   扩展配置（timeout / query / auth / redirectOnUnauthorized）
  * @returns Promise<T> — 成功时直接返回 data 字段
  * @throws  Error — 失败时抛出含清晰 message 的错误
  *
  * 用法：
  *   const user = await request<User>('/api/users/me')
+ *   const plan = await request('/api/ai/plans/generate', { method: 'POST', data: body }, { timeout: 120000 })
  */
 export async function request<T = unknown>(
   url: string,
   options: Partial<UniApp.RequestOptions> = {},
+  extra: RequestExtraOptions = {},
 ): Promise<T> {
   // 每次请求动态读取运行时 Base URL
   const baseUrl = getApiBaseUrl()
@@ -78,18 +108,28 @@ export async function request<T = unknown>(
 
   const token = getToken()
 
+  // 解析扩展配置（默认值）
+  const shouldAuth = extra.auth !== false
+  const shouldRedirect = extra.redirectOnUnauthorized !== false
+
   const header: Record<string, string> = {
     'Content-Type': 'application/json',
     ...((options.header as Record<string, string>) || {}),
   }
 
-  // 注入 JWT
-  if (token) {
+  // 注入 JWT — 仅当 auth 未显式关闭时
+  if (token && shouldAuth) {
     header['Authorization'] = `Bearer ${token}`
   }
 
+  // 附加 Query 参数
+  const finalUrl = extra.query
+    ? appendQueryParams(url, extra.query)
+    : url
+
   return new Promise((resolve, reject) => {
-    const reqTimeout = options.timeout || TIMEOUT
+    // 超时优先级：extra.timeout > options.timeout > 全局 TIMEOUT
+    const reqTimeout = extra.timeout ?? options.timeout ?? TIMEOUT
     let _settled = false
     let _reqTask: UniApp.RequestTask | null = null
 
@@ -115,7 +155,7 @@ export async function request<T = unknown>(
       if (_settled) return
       if (import.meta.env.DEV) {
         console.warn('[request] JS timeout guard fired', {
-          url: `${baseUrl}${url}`,
+          url: `${baseUrl}${finalUrl}`,
           timeout: reqTimeout,
         })
       }
@@ -129,7 +169,7 @@ export async function request<T = unknown>(
     }, reqTimeout)
 
     _reqTask = uni.request({
-      url: `${baseUrl}${url}`,
+      url: `${baseUrl}${finalUrl}`,
       method: options.method || 'GET',
       data: options.data,
       header,
@@ -139,18 +179,28 @@ export async function request<T = unknown>(
         const statusCode = res.statusCode
         const body = res.data as Record<string, unknown>
 
-        // 401 / 403 — 清除登录态并跳转登录页（防重入）
+        // 401 / 403 — 根据 redirectOnUnauthorized 决定行为
         if (statusCode === 401 || statusCode === 403) {
-          if (!_authRedirecting) {
-            _authRedirecting = true
-            clearAuthStorage()
-            uni.showToast({ title: '登录已过期，请重新登录', icon: 'none' })
-            uni.reLaunch({
-              url: '/pages/auth/login',
-              complete: () => { _authRedirecting = false },
-            })
+          if (shouldRedirect) {
+            // 受保护请求：清除登录态并跳转登录页（防重入）
+            if (!_authRedirecting) {
+              _authRedirecting = true
+              clearAuthStorage()
+              uni.showToast({ title: '登录已过期，请重新登录', icon: 'none' })
+              uni.reLaunch({
+                url: '/pages/auth/login',
+                complete: () => { _authRedirecting = false },
+              })
+            }
           }
+          // 无论是否跳转，都返回错误给调用方
           settleReject(new ApiError('登录已过期，请重新登录', 'AUTH_EXPIRED'))
+          return
+        }
+
+        // 204 No Content — 返回 undefined，不访问 response.data
+        if (statusCode === 204) {
+          settleResolve(undefined as unknown as T)
           return
         }
 
@@ -191,7 +241,7 @@ export async function request<T = unknown>(
         // 开发环境：输出诊断信息（不含敏感数据）
         if (import.meta.env.DEV) {
           console.error('[request] network failure', {
-            url: `${baseUrl}${url}`,
+            url: `${baseUrl}${finalUrl}`,
             method: options.method || 'GET',
             errMsg: err.errMsg,
           })
@@ -219,18 +269,52 @@ export async function request<T = unknown>(
  *
  * http.get<User[]>('/api/users/me')
  * http.post<LoginResult>('/api/users/login', { username, password })
+ * http.publicGet<PlanSnapshot>('/api/public/plan-shares/token123')
  */
 export const http = {
-  get<TRes = unknown>(url: string, params?: Record<string, unknown>, extra?: RequestExtraOptions): Promise<TRes> {
-    return request<TRes>(url, { method: 'GET', data: params, ...extra })
+  get<TRes = unknown>(
+    url: string,
+    params?: Record<string, unknown>,
+    extra?: RequestExtraOptions,
+  ): Promise<TRes> {
+    return request<TRes>(url, { method: 'GET', data: params }, extra)
   },
-  post<TRes = unknown>(url: string, data?: Record<string, unknown>, extra?: RequestExtraOptions): Promise<TRes> {
-    return request<TRes>(url, { method: 'POST', data, ...extra })
+  post<TRes = unknown>(
+    url: string,
+    data?: Record<string, unknown>,
+    extra?: RequestExtraOptions,
+  ): Promise<TRes> {
+    return request<TRes>(url, { method: 'POST', data }, extra)
   },
-  put<TRes = unknown>(url: string, data?: Record<string, unknown>, extra?: RequestExtraOptions): Promise<TRes> {
-    return request<TRes>(url, { method: 'PUT', data, ...extra })
+  put<TRes = unknown>(
+    url: string,
+    data?: Record<string, unknown>,
+    extra?: RequestExtraOptions,
+  ): Promise<TRes> {
+    return request<TRes>(url, { method: 'PUT', data }, extra)
   },
-  delete<TRes = unknown>(url: string, params?: Record<string, unknown>, extra?: RequestExtraOptions): Promise<TRes> {
-    return request<TRes>(url, { method: 'DELETE', data: params, ...extra })
+  delete<TRes = unknown>(
+    url: string,
+    params?: Record<string, unknown>,
+    extra?: RequestExtraOptions,
+  ): Promise<TRes> {
+    return request<TRes>(url, { method: 'DELETE', data: params }, extra)
+  },
+  /**
+   * 公开 GET 请求 — 不注入 Authorization header，401 不跳转登录页。
+   *
+   * 用于公开分享页面等无需认证的接口。
+   * 等效于 http.get(url, params, { auth: false, redirectOnUnauthorized: false })
+   */
+  publicGet<TRes = unknown>(
+    url: string,
+    params?: Record<string, unknown>,
+    extra?: RequestExtraOptions,
+  ): Promise<TRes> {
+    return request<TRes>(url, { method: 'GET', data: params }, {
+      ...extra,
+      auth: false,
+      redirectOnUnauthorized: false,
+    })
   },
 }
