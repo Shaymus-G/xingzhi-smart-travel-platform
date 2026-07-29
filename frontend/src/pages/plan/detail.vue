@@ -1261,20 +1261,28 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
 .detail-page {
   min-height: 100vh;
   background: #f5f5f5;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .detail-loading, .detail-empty {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding-top: 200rpx;
+  padding: 200rpx 48rpx 0;
   font-size: 28rpx;
   color: #999;
+  box-sizing: border-box;
+  width: 100%;
 }
 
 .detail-scroll {
   padding: 24rpx 32rpx;
   padding-bottom: 60rpx;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 // Info card
@@ -1284,6 +1292,7 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
   padding: 24rpx;
   margin-bottom: 20rpx;
   width: 100%;
+  max-width: 100%;
   box-sizing: border-box;
 }
 
@@ -1301,12 +1310,15 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
   display: block;
   margin-bottom: 16rpx;
   line-height: 1.5;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .info-grid {
   display: flex;
   flex-wrap: wrap;
   gap: 16rpx;
+  min-width: 0;
 }
 
 .info-item {
@@ -1324,6 +1336,8 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
   font-size: 28rpx;
   color: #333;
   font-weight: 600;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .info-value.highlight {
@@ -1345,6 +1359,9 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
   border-radius: 16rpx;
   padding: 24rpx;
   margin-bottom: 20rpx;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .day-header {
@@ -1353,6 +1370,8 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
   justify-content: space-between;
   gap: 16rpx;
   margin-bottom: 12rpx;
+  min-width: 0;
+  width: 100%;
 }
 
 .day-header-left {
@@ -1572,6 +1591,9 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
   border-radius: 16rpx;
   padding: 24rpx;
   margin-bottom: 20rpx;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .budget-row {
@@ -1580,6 +1602,7 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
   font-size: 28rpx;
   color: #333;
   padding: 8rpx 0;
+  min-width: 0;
 }
 
 .budget-row.total {
@@ -1595,6 +1618,9 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
   border-radius: 16rpx;
   padding: 24rpx;
   margin-bottom: 20rpx;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .tip-item {
@@ -1603,6 +1629,8 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
   display: block;
   padding: 6rpx 0;
   line-height: 1.5;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 // Footer
@@ -1611,10 +1639,13 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
   padding: 32rpx 0;
   font-size: 24rpx;
   color: #bbb;
+  width: 100%;
+  box-sizing: border-box;
 
   text {
     display: block;
     margin-bottom: 8rpx;
+    overflow-wrap: anywhere;
   }
 }
 
@@ -1659,9 +1690,14 @@ function hasAnyBreakdown(b: { tickets: number | null; food: number | null; lodgi
   display: flex;
   gap: 24rpx;
   padding: 24rpx 0 40rpx;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
 
   .detail-action-btn {
     flex: 1;
+    min-width: 0;
+    box-sizing: border-box;
   }
 }
 

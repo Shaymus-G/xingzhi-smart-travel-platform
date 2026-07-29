@@ -37,19 +37,70 @@ function fmtDateOnly(dateStr: string): string {
 }
 
 // ========== 状态 ==========
-type PageStatus = 'loading' | 'loaded' | 'not_found' | 'network_error' | 'invalid'
+type PageStatus = 'input' | 'loading' | 'loaded' | 'not_found' | 'network_error'
 
 const pageStatus = ref<PageStatus>('loading')
 const viewModel = ref<PublicShareViewModel | null>(null)
 const errorMessage = ref('')
 const token = ref('')
+const inputToken = ref('')
+const isSubmitting = ref(false)
+
+// ========== Token 输入规范化 ==========
+
+/**
+ * 从用户输入中提取 share_token
+ *
+ * 支持格式：
+ *   - 纯 Token：abc123def456
+ *   - API 路径：/api/public/plan-shares/abc123def456
+ *   - 完整 URL：https://example.com/#/pages/plan/share?token=abc123def456
+ *
+ * 不依赖 URL / URLSearchParams / window / document。
+ */
+function normalizeShareTokenInput(input: string): string | null {
+  let text = input.trim()
+  if (!text) return null
+
+  // 包含 token= 参数 → 提取 token 值
+  const tokenParamIdx = text.indexOf('token=')
+  if (tokenParamIdx >= 0) {
+    const after = text.slice(tokenParamIdx + 6) // 'token='.length
+    // 截断到下一个 & 或 #
+    const ampIdx = after.search(/[&#]/)
+    text = ampIdx >= 0 ? after.slice(0, ampIdx) : after
+    // 解码
+    try { text = decodeURIComponent(text) } catch { /* keep raw */ }
+    text = text.trim()
+    if (text) return text
+    return null
+  }
+
+  // 包含 /api/public/plan-shares/ → 提取最后一段
+  const sharesIdx = text.indexOf('/api/public/plan-shares/')
+  if (sharesIdx >= 0) {
+    const after = text.slice(sharesIdx + '/api/public/plan-shares/'.length)
+    // 截断到下一个 ? 或 #
+    const qIdx = after.search(/[?#]/)
+    const extracted = qIdx >= 0 ? after.slice(0, qIdx) : after
+    const cleaned = extracted.trim().replace(/\/+$/, '')
+    if (cleaned) return cleaned
+    return null
+  }
+
+  // 纯 Token：无空格、无斜杠的字符串
+  if (!text.includes(' ') && !text.includes('\n')) {
+    return text
+  }
+
+  return null
+}
 
 // ========== 生命周期 ==========
 onLoad((options: Record<string, string> | undefined) => {
   const rawToken = options?.token
   if (!rawToken || !rawToken.trim()) {
-    pageStatus.value = 'invalid'
-    errorMessage.value = '缺少分享令牌'
+    pageStatus.value = 'input'
     return
   }
   token.value = rawToken.trim()
@@ -59,7 +110,7 @@ onLoad((options: Record<string, string> | undefined) => {
 // ========== 数据加载 ==========
 async function loadShare(): Promise<void> {
   if (!token.value) {
-    pageStatus.value = 'invalid'
+    pageStatus.value = 'input'
     return
   }
 
@@ -91,6 +142,34 @@ async function loadShare(): Promise<void> {
   viewModel.value = normalized.data
   pageStatus.value = 'loaded'
 }
+
+// ========== Token 提交 ==========
+
+/** 用户点击"查看计划" */
+function handleSubmitToken(): void {
+  if (isSubmitting.value) return
+
+  const normalized = normalizeShareTokenInput(inputToken.value)
+  if (!normalized) {
+    uni.showToast({ title: '分享 Token 格式不正确', icon: 'none' })
+    return
+  }
+
+  isSubmitting.value = true
+  token.value = normalized
+  void loadShare().finally(() => {
+    isSubmitting.value = false
+  })
+}
+
+/** 重试 — 返回输入界面 */
+function handleBackToInput(): void {
+  token.value = ''
+  inputToken.value = ''
+  viewModel.value = null
+  errorMessage.value = ''
+  pageStatus.value = 'input'
+}
 </script>
 
 <template>
@@ -102,11 +181,34 @@ async function loadShare(): Promise<void> {
       <text>加载中...</text>
     </view>
 
-    <!-- 缺少令牌 -->
-    <view v-else-if="pageStatus === 'invalid'" class="share-status">
-      <text class="share-error-icon">⚠️</text>
-      <text class="share-error-title">无效的分享链接</text>
-      <text class="share-error-desc">链接缺少分享令牌，无法查看计划内容。</text>
+    <!-- Token 输入表单（无 token 参数时） -->
+    <view v-else-if="pageStatus === 'input'" class="share-input-area">
+      <view class="share-input-card">
+        <text class="share-input-icon">🔗</text>
+        <text class="share-input-title">查看分享的旅行计划</text>
+        <text class="share-input-desc">输入分享 Token 查看他人分享的旅行计划</text>
+
+        <input
+          v-model="inputToken"
+          class="share-input-field"
+          placeholder="请输入分享 Token"
+          placeholder-style="color:#ccc;"
+          :disabled="isSubmitting"
+          confirm-type="done"
+          @confirm="handleSubmitToken"
+        />
+
+        <view
+          class="share-input-btn"
+          :class="{ disabled: !inputToken.trim() || isSubmitting }"
+          @tap="handleSubmitToken"
+        >
+          <text>{{ isSubmitting ? '加载中...' : '查看计划' }}</text>
+        </view>
+
+        <text class="share-input-hint">分享 Token 由计划创建者提供</text>
+        <text class="share-input-hint-secondary">支持粘贴 Token、分享链接或 API 地址</text>
+      </view>
     </view>
 
     <!-- 不存在/已撤销/已过期 -->
@@ -114,6 +216,11 @@ async function loadShare(): Promise<void> {
       <text class="share-error-icon">🔗</text>
       <text class="share-error-title">分享不存在或已失效</text>
       <text class="share-error-desc">该分享链接可能已被撤销、已过期或不存在。</text>
+      <view class="share-action-row">
+        <view class="share-retry-btn" @tap="handleBackToInput">
+          <text>重新输入</text>
+        </view>
+      </view>
     </view>
 
     <!-- 网络错误 -->
@@ -121,13 +228,19 @@ async function loadShare(): Promise<void> {
       <text class="share-error-icon">📡</text>
       <text class="share-error-title">网络异常</text>
       <text class="share-error-desc">{{ errorMessage || '请检查网络后重试' }}</text>
-      <view class="share-retry-btn" @tap="loadShare">
-        <text>重新加载</text>
+      <view class="share-action-row">
+        <view class="share-retry-btn" @tap="loadShare">
+          <text>重新加载</text>
+        </view>
+        <view class="share-retry-btn secondary" @tap="handleBackToInput">
+          <text>重新输入</text>
+        </view>
       </view>
     </view>
 
     <!-- 正常内容 -->
     <scroll-view v-else-if="viewModel" class="share-scroll" scroll-y>
+      <view class="share-content">
       <!-- 基本信息 -->
       <view class="info-card">
         <text class="info-title">{{ viewModel.title }}</text>
@@ -218,24 +331,64 @@ async function loadShare(): Promise<void> {
         <text>实际价格、开放时间和天气可能变化，出行前请再次确认</text>
         <text>由"行知"智慧文旅生成</text>
       </view>
+      </view><!-- /.share-content -->
     </scroll-view>
   </view>
 </template>
 
 <style lang="scss" scoped>
+// ==================== 页面根容器 ====================
 .share-page {
   min-height: 100vh;
   background: #f5f5f5;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
-// Status
+// ==================== scroll-view ====================
+.share-scroll {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+// ==================== 统一内容容器（左右对称 32rpx） ====================
+.share-content {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 24rpx 32rpx 60rpx 32rpx;
+}
+
+// ==================== 状态页（loading / 错误 / 空状态） ====================
 .share-status {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding-top: 200rpx;
-  padding-left: 48rpx;
-  padding-right: 48rpx;
+  padding: 160rpx 32rpx 0;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+
+  text {
+    max-width: 100%;
+  }
+}
+
+.share-action-row {
+  display: flex;
+  gap: 24rpx;
+  margin-top: 32rpx;
+  max-width: 100%;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.share-retry-btn.secondary {
+  border-color: #ccc;
+  color: #999;
 }
 
 .share-error-icon {
@@ -248,6 +401,10 @@ async function loadShare(): Promise<void> {
   font-weight: 700;
   color: #333;
   margin-bottom: 16rpx;
+  text-align: center;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
 }
 
 .share-error-desc {
@@ -255,6 +412,9 @@ async function loadShare(): Promise<void> {
   color: #999;
   text-align: center;
   line-height: 1.5;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
 }
 
 .share-retry-btn {
@@ -266,18 +426,116 @@ async function loadShare(): Promise<void> {
   color: #4A90D9;
 }
 
-// Scroll
-.share-scroll {
-  padding: 24rpx 32rpx;
-  padding-bottom: 60rpx;
+// ==================== Token 输入区域 ====================
+.share-input-area {
+  display: flex;
+  justify-content: center;
+  padding: 80rpx 32rpx;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
 }
 
-// Info card
+.share-input-card {
+  width: 100%;
+  max-width: 100%;
+  background: #fff;
+  border-radius: 24rpx;
+  padding: 48rpx 40rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  box-sizing: border-box;
+}
+
+.share-input-icon {
+  font-size: 72rpx;
+  margin-bottom: 20rpx;
+}
+
+.share-input-title {
+  font-size: 32rpx;
+  font-weight: 700;
+  color: #333;
+  margin-bottom: 12rpx;
+  text-align: center;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+.share-input-desc {
+  font-size: 26rpx;
+  color: #999;
+  text-align: center;
+  margin-bottom: 32rpx;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+.share-input-field {
+  width: 100%;
+  max-width: 100%;
+  height: 80rpx;
+  background: #f8f8f8;
+  border-radius: 12rpx;
+  padding: 0 24rpx;
+  font-size: 28rpx;
+  box-sizing: border-box;
+  margin-bottom: 24rpx;
+}
+
+.share-input-btn {
+  width: 100%;
+  max-width: 100%;
+  height: 80rpx;
+  background: #4A90D9;
+  border-radius: 40rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 20rpx;
+  box-sizing: border-box;
+
+  text {
+    font-size: 30rpx;
+    color: #fff;
+  }
+}
+
+.share-input-btn.disabled {
+  background: #ccc;
+}
+
+.share-input-hint {
+  font-size: 24rpx;
+  color: #bbb;
+  text-align: center;
+  line-height: 1.5;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.share-input-hint-secondary {
+  font-size: 22rpx;
+  color: #ccc;
+  text-align: center;
+  margin-top: 4rpx;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+// ==================== 信息卡片 ====================
 .info-card {
   background: #fff;
   border-radius: 16rpx;
   padding: 24rpx;
   margin-bottom: 20rpx;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .info-title {
@@ -286,12 +544,15 @@ async function loadShare(): Promise<void> {
   color: #333;
   display: block;
   margin-bottom: 20rpx;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .info-grid {
   display: flex;
   flex-wrap: wrap;
   gap: 16rpx;
+  min-width: 0;
 }
 
 .info-item {
@@ -309,6 +570,8 @@ async function loadShare(): Promise<void> {
   font-size: 28rpx;
   color: #333;
   font-weight: 600;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .info-time-row {
@@ -317,28 +580,35 @@ async function loadShare(): Promise<void> {
   margin-top: 16rpx;
   padding-top: 16rpx;
   border-top: 1rpx solid #f0f0f0;
+  flex-wrap: wrap;
 }
 
 .info-time {
   font-size: 24rpx;
   color: #bbb;
+  overflow-wrap: anywhere;
 }
 
-// Section title
+// ==================== 段落标题 ====================
 .section-title {
   font-size: 30rpx;
   font-weight: 700;
   color: #333;
   display: block;
   margin-bottom: 16rpx;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
-// Day card
+// ==================== 每日行程卡片 ====================
 .day-card {
   background: #fff;
   border-radius: 16rpx;
   padding: 24rpx;
   margin-bottom: 20rpx;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .day-header {
@@ -346,6 +616,8 @@ async function loadShare(): Promise<void> {
   align-items: center;
   gap: 16rpx;
   margin-bottom: 16rpx;
+  min-width: 0;
+  width: 100%;
 }
 
 .day-num {
@@ -361,17 +633,25 @@ async function loadShare(): Promise<void> {
   font-size: 28rpx;
   font-weight: 600;
   color: #333;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
-// Timeline
+// ==================== 时间线 ====================
 .timeline {
   padding-left: 12rpx;
+  min-width: 0;
 }
 
 .timeline-item {
   display: flex;
   gap: 16rpx;
   margin-bottom: 20rpx;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
 }
 
 .timeline-dot {
@@ -386,6 +666,8 @@ async function loadShare(): Promise<void> {
 .timeline-content {
   flex: 1;
   min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .tl-header {
@@ -393,6 +675,7 @@ async function loadShare(): Promise<void> {
   justify-content: space-between;
   align-items: baseline;
   min-width: 0;
+  max-width: 100%;
 }
 
 .tl-name {
@@ -420,25 +703,35 @@ async function loadShare(): Promise<void> {
   color: #999;
   display: block;
   margin-top: 4rpx;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
 }
 
 .tl-cost {
   font-size: 24rpx;
   color: #FF6B35;
   margin-top: 4rpx;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .tl-transport {
   font-size: 24rpx;
   color: #999;
   margin-top: 4rpx;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
 }
 
-// Meals & Hotel
+// ==================== 餐饮 & 酒店 ====================
 .meals-section, .hotel-section {
   margin-top: 16rpx;
   padding-top: 16rpx;
   border-top: 1rpx solid #f0f0f0;
+  width: 100%;
+  max-width: 100%;
 }
 
 .meals-title {
@@ -447,12 +740,17 @@ async function loadShare(): Promise<void> {
   color: #333;
   display: block;
   margin-bottom: 8rpx;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .meal-item {
   font-size: 26rpx;
   color: #666;
   margin-bottom: 4rpx;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
 }
 
 .hotel-name {
@@ -460,14 +758,19 @@ async function loadShare(): Promise<void> {
   font-weight: 600;
   color: #333;
   display: block;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
-// Tips
+// ==================== Tips / 空状态卡片 ====================
 .tips-card {
   background: #fff;
   border-radius: 16rpx;
   padding: 24rpx;
   margin-bottom: 20rpx;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .tip-item {
@@ -475,18 +778,26 @@ async function loadShare(): Promise<void> {
   color: #666;
   display: block;
   line-height: 1.5;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
-// Footer
+// ==================== 页脚 ====================
 .share-footer {
   text-align: center;
   padding: 32rpx 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding-bottom: calc(32rpx + env(safe-area-inset-bottom));
 
   text {
     display: block;
     margin-bottom: 8rpx;
     font-size: 24rpx;
     color: #bbb;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 }
 </style>
