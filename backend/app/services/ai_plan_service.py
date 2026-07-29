@@ -372,6 +372,16 @@ async def generate_travel_plan(
         user_preferences=preferences,
     )
 
+    # ==================== 11.5 地点坐标绑定（同名消歧 + GCJ-02 回填） ====================
+    try:
+        from app.services.location_binder import bind_plan_locations
+        plan_dict_before = final_plan.model_dump()
+        plan_dict_after = bind_plan_locations(plan_dict_before, city_id, db)
+        final_plan = StructuredTravelPlan.model_validate(plan_dict_after)
+        logger.info("P3 地点绑定完成: city_id=%d", city_id)
+    except Exception:
+        logger.warning("P3 地点绑定失败: city_id=%d", city_id, exc_info=True)
+
     # ==================== 12. 渲染 Markdown ====================
     markdown = render_travel_plan_markdown(final_plan)
 

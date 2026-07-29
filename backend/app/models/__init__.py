@@ -19,6 +19,7 @@ from app.models.preference import UserPreference
 from app.models.ai_session import AISession
 from app.models.entertainment import Entertainment
 from app.models.shopping_mall import ShoppingMall
+from app.models.plan_share import PlanShare
 
 __all__ = [
     "BaseModel",
