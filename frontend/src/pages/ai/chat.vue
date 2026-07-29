@@ -15,6 +15,9 @@ import NavBar from '@/components/NavBar.vue'
 import { sendChatMessage, getAISessions, deleteAISession } from '@/api/ai'
 import { useUserStore } from '@/stores/user'
 import type { ChatMessage } from '@/types/ai'
+import { markdownToBlocks } from '@/utils/markdown'
+import type { MarkdownRenderBlock } from '@/utils/markdown'
+import MarkdownTable from '@/components/MarkdownTable.vue'
 
 const userStore = useUserStore()
 
@@ -338,6 +341,28 @@ function goLogin() {
   uni.navigateTo({ url: '/pages/auth/login' })
 }
 
+// ========== Markdown 渲染 ==========
+
+/** 消息是否包含表格（用于宽版气泡） */
+function messageHasTable(msg: ChatMessage): boolean {
+  if (msg.role !== 'assistant') return false
+  return renderedBlocks(msg).some((b) => b.type === 'table')
+}
+
+/** 将消息内容解析为渲染块数组（仅 AI 消息使用 Markdown） */
+function renderedBlocks(msg: ChatMessage): MarkdownRenderBlock[] {
+  if (msg.role === 'assistant') {
+    return markdownToBlocks(msg.content)
+  }
+  // 用户消息保持纯文本 HTML
+  const escaped = msg.content
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\n/g, '<br>')
+  return [{ type: 'html', html: escaped }]
+}
+
 // ========== 页面生命周期 ==========
 onShow(() => {
   pageActive = true
@@ -405,11 +430,39 @@ onUnload(() => {
         :key="msg.id"
         :id="'msg-' + index"
         class="chat-message"
-        :class="{ 'chat-message-self': msg.role === 'user' }"
+        :class="{
+          'chat-message-self': msg.role === 'user',
+          'chat-message--table': messageHasTable(msg),
+        }"
       >
-        <view class="chat-bubble-row" :class="{ 'chat-bubble-row-self': msg.role === 'user' }">
-          <view class="chat-bubble" :class="msg.role">
-            <text>{{ msg.content }}</text>
+        <view
+          class="chat-bubble-row"
+          :class="{
+            'chat-bubble-row-self': msg.role === 'user',
+            'chat-bubble-row--wide': messageHasTable(msg),
+          }"
+        >
+          <view
+            class="chat-bubble"
+            :class="{
+              [msg.role]: true,
+              'chat-bubble--wide': messageHasTable(msg),
+            }"
+          >
+            <!-- AI 消息：块级渲染（支持表格组件） -->
+            <template v-if="msg.role === 'assistant'">
+              <template v-for="(block, bi) in renderedBlocks(msg)" :key="bi">
+                <rich-text v-if="block.type === 'html'" :nodes="block.html" />
+                <MarkdownTable
+                  v-else-if="block.type === 'table'"
+                  :headers="block.headers"
+                  :alignments="block.alignments"
+                  :rows="block.rows"
+                />
+              </template>
+            </template>
+            <!-- 用户消息：纯文本 -->
+            <text v-else>{{ msg.content }}</text>
           </view>
 
           <!-- 删除按钮（仅服务端消息） -->
@@ -491,13 +544,18 @@ onUnload(() => {
 
 .chat-list {
   flex: 1;
-  padding: 16rpx 32rpx;
+  padding: 16rpx 24rpx;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .chat-message {
   margin-bottom: 24rpx;
   display: flex;
   flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .chat-message-self {
@@ -510,18 +568,46 @@ onUnload(() => {
   border-radius: 16rpx;
   font-size: 28rpx;
   line-height: 1.6;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .chat-bubble.user {
   background: #4A90D9;
   color: #fff;
   border-bottom-right-radius: 4rpx;
+  margin-right: 0;
 }
 
 .chat-bubble.assistant {
   background: #fff;
   color: #333;
   border-bottom-left-radius: 4rpx;
+  max-width: 85%;
+  overflow: visible;
+}
+
+// ===== 宽版气泡（含表格的 AI 消息） =====
+.chat-message--table {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.chat-bubble-row--wide {
+  max-width: 100%;
+}
+
+.chat-bubble--wide {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding-left: 16rpx;
+  padding-right: 16rpx;
+  overflow: visible;
 }
 
 // ========== 顶部操作区 ==========
