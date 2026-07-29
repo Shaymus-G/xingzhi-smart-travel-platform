@@ -26,6 +26,24 @@ const TIMEOUT = 60000
 /** 防止 401 时多次 reLaunch */
 let _authRedirecting = false
 
+// ==================== 错误类型 ====================
+
+/** API 层统一错误 — 携带机器可读 code，页面层不应通过中文文本判断错误类型 */
+export class ApiError extends Error {
+  code: string
+  constructor(message: string, code: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.code = code
+  }
+}
+
+/** 单请求额外配置 */
+export interface RequestExtraOptions {
+  /** 覆盖全局默认超时 (ms) */
+  timeout?: number
+}
+
 /**
  * 类型桥接辅助 — 将任意接口类型转为 Record<string, unknown>
  *
@@ -54,7 +72,7 @@ export async function request<T = unknown>(
 
   if (!baseUrl) {
     return Promise.reject(
-      new Error('API 地址未配置，请在设置中配置后端地址'),
+      new ApiError('API 地址未配置，请在设置中配置后端地址', 'CONFIG_ERROR'),
     )
   }
 
@@ -73,6 +91,7 @@ export async function request<T = unknown>(
   return new Promise((resolve, reject) => {
     const reqTimeout = options.timeout || TIMEOUT
     let _settled = false
+    let _reqTask: UniApp.RequestTask | null = null
 
     const settleReject = (err: Error) => {
       if (_settled) return
@@ -90,6 +109,8 @@ export async function request<T = unknown>(
 
     // JS 级超时保护：uni.request 的 timeout 在 H5 模式下可能不生效，
     // 当后端不可达时 Promise 会永久 pending，导致页面 loading 永不结束。
+    // 触发后调用 RequestTask.abort() 释放前端连接资源，
+    // 但不等于取消服务端任务 — 后端可能仍在处理。
     const timer = setTimeout(() => {
       if (_settled) return
       if (import.meta.env.DEV) {
@@ -98,10 +119,16 @@ export async function request<T = unknown>(
           timeout: reqTimeout,
         })
       }
-      settleReject(new Error('请求超时，请稍后重试'))
+      // 先标记 settled 再 abort，防止 abort 触发的 fail 回调覆盖超时错误
+      _settled = true
+      clearTimeout(timer)
+      if (_reqTask && typeof _reqTask.abort === 'function') {
+        _reqTask.abort()
+      }
+      reject(new ApiError('请求超时，请稍后重试', 'REQUEST_TIMEOUT'))
     }, reqTimeout)
 
-    uni.request({
+    _reqTask = uni.request({
       url: `${baseUrl}${url}`,
       method: options.method || 'GET',
       data: options.data,
@@ -123,7 +150,7 @@ export async function request<T = unknown>(
               complete: () => { _authRedirecting = false },
             })
           }
-          settleReject(new Error('登录已过期，请重新登录'))
+          settleReject(new ApiError('登录已过期，请重新登录', 'AUTH_EXPIRED'))
           return
         }
 
@@ -133,7 +160,7 @@ export async function request<T = unknown>(
           const msg = Array.isArray(detail)
             ? detail.map((d: Record<string, unknown>) => d.msg || '').join('; ')
             : String(detail)
-          settleReject(new Error(msg || '请求参数错误'))
+          settleReject(new ApiError(msg || '请求参数错误', 'VALIDATION_ERROR'))
           return
         }
 
@@ -145,14 +172,14 @@ export async function request<T = unknown>(
 
         // 业务失败（code !== 0）
         if (body?.code !== undefined && body.code !== 0) {
-          settleReject(new Error((body.message as string) || '请求失败'))
+          settleReject(new ApiError((body.message as string) || '请求失败', 'BUSINESS_ERROR'))
           return
         }
 
         // HTTP 错误状态码
         if (statusCode && statusCode >= 400) {
           const detail = body?.detail as string | undefined
-          settleReject(new Error(detail || `请求失败 (${statusCode})`))
+          settleReject(new ApiError(detail || `请求失败 (${statusCode})`, 'HTTP_ERROR'))
           return
         }
 
@@ -181,7 +208,7 @@ export async function request<T = unknown>(
           message = rawMsg || '网络异常，请检查网络连接'
         }
 
-        settleReject(new Error(message))
+        settleReject(new ApiError(message, 'NETWORK_ERROR'))
       },
     })
   })
@@ -194,16 +221,16 @@ export async function request<T = unknown>(
  * http.post<LoginResult>('/api/users/login', { username, password })
  */
 export const http = {
-  get<TRes = unknown>(url: string, params?: Record<string, unknown>): Promise<TRes> {
-    return request<TRes>(url, { method: 'GET', data: params })
+  get<TRes = unknown>(url: string, params?: Record<string, unknown>, extra?: RequestExtraOptions): Promise<TRes> {
+    return request<TRes>(url, { method: 'GET', data: params, ...extra })
   },
-  post<TRes = unknown>(url: string, data?: Record<string, unknown>): Promise<TRes> {
-    return request<TRes>(url, { method: 'POST', data })
+  post<TRes = unknown>(url: string, data?: Record<string, unknown>, extra?: RequestExtraOptions): Promise<TRes> {
+    return request<TRes>(url, { method: 'POST', data, ...extra })
   },
-  put<TRes = unknown>(url: string, data?: Record<string, unknown>): Promise<TRes> {
-    return request<TRes>(url, { method: 'PUT', data })
+  put<TRes = unknown>(url: string, data?: Record<string, unknown>, extra?: RequestExtraOptions): Promise<TRes> {
+    return request<TRes>(url, { method: 'PUT', data, ...extra })
   },
-  delete<TRes = unknown>(url: string, params?: Record<string, unknown>): Promise<TRes> {
-    return request<TRes>(url, { method: 'DELETE', data: params })
+  delete<TRes = unknown>(url: string, params?: Record<string, unknown>, extra?: RequestExtraOptions): Promise<TRes> {
+    return request<TRes>(url, { method: 'DELETE', data: params, ...extra })
   },
 }

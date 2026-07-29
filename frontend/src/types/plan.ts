@@ -52,6 +52,10 @@ export interface PlanDestination {
   city_id: number | null
   name: string
   province: string
+  /** 城市中心纬度；用于地图搜索的默认城市范围 */
+  latitude: number | null
+  /** 城市中心经度 */
+  longitude: number | null
 }
 
 /** 预算明细 */
@@ -101,6 +105,19 @@ export interface PlanTimelineItem {
   estimated_cost: number | null
   reason: string | null
   transport_to_next: string | null
+
+  /** 纬度（GCJ-02）；历史计划可能为 null */
+  latitude: number | null
+  /** 经度（GCJ-02）；历史计划可能为 null */
+  longitude: number | null
+  /** 所在城市名 */
+  city: string | null
+  /** 所在区县名 */
+  district: string | null
+  /** 高德 POI ID */
+  poi_id: string | null
+  /** 坐标系标识，如 "GCJ-02"；缺失时前端不假定坐标系 */
+  coordinate_system: string | null
 }
 
 /** 用餐信息 */
@@ -113,6 +130,13 @@ export interface PlanMeal {
   resource_id: number | null
   name: string
   estimated_cost: number | null
+
+  /** 纬度（GCJ-02）；历史计划可能为 null */
+  latitude: number | null
+  /** 经度（GCJ-02）；历史计划可能为 null */
+  longitude: number | null
+  /** 所在城市名 */
+  city: string | null
 }
 
 /** 住宿信息 */
@@ -125,6 +149,13 @@ export interface PlanHotel {
   name: string
   address: string | null
   estimated_cost: number | null
+
+  /** 纬度（GCJ-02）；历史计划可能为 null */
+  latitude: number | null
+  /** 经度（GCJ-02）；历史计划可能为 null */
+  longitude: number | null
+  /** 所在城市名 */
+  city: string | null
 }
 
 /** 规范化后的完整结构化旅行计划 */

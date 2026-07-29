@@ -319,6 +319,7 @@ function fmtScore(score: number | null): string {
         v-if="resourceType && resourceId && resource"
         :target-type="resourceType"
         :target-id="resourceId"
+        horizontal-padding="24rpx"
       />
     </scroll-view>
   </view>
